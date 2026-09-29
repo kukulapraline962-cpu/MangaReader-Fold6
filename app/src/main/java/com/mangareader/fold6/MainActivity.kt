@@ -199,9 +199,25 @@ fun MangaReaderApp() {
                 val result =
                     MangaDexClient.api.getChapterPages(chapter.id)
 
-                pageUrls = result.chapter.data.map { fileName ->
-                    "${result.baseUrl}/data/${result.chapter.hash}/$fileName"
-                }
+                
+                val useDataSaver = result.chapter.data.isEmpty()
+
+val files = if (useDataSaver) {
+    result.chapter.dataSaver
+} else {
+    result.chapter.data
+}
+
+val qualityFolder = if (useDataSaver) {
+    "data-saver"
+} else {
+    "data"
+}
+
+pageUrls = files.map { fileName ->
+    "${result.baseUrl}/$qualityFolder/${result.chapter.hash}/$fileName"
+}    
+                
             } catch (e: Exception) {
                 error = e.message ?: "Impossible de charger les pages"
             } finally {
