@@ -4,10 +4,13 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.launch
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 import retrofit2.http.GET
@@ -39,7 +42,6 @@ interface MangaDexApi {
 object MangaDexClient {
 
     val api: MangaDexApi by lazy {
-
         Retrofit.Builder()
             .baseUrl("https://api.mangadex.org/")
             .addConverterFactory(
@@ -76,6 +78,71 @@ fun MangaReaderApp() {
         mutableStateOf(true)
     }
 
+    var mangas by remember {
+        mutableStateOf<List<MangaData>>(emptyList())
+    }
+
+    var loading by remember {
+        mutableStateOf(false)
+    }
+
+    var error by remember {
+        mutableStateOf<String?>(null)
+    }
+
+    val scope = rememberCoroutineScope()
+
+    fun mangaTitle(
+        manga: MangaData
+    ): String {
+
+        return manga.attributes.title["fr"]
+            ?: manga.attributes.title["en"]
+            ?: manga.attributes.title.values.firstOrNull()
+            ?: "Sans titre"
+    }
+
+    fun searchManga() {
+
+        if (search.isBlank()) {
+            return
+        }
+
+        scope.launch {
+
+            loading = true
+            error = null
+
+            try {
+
+                val result =
+                    MangaDexClient.api.searchManga(
+                        search.trim()
+                    )
+
+                mangas =
+                    result.data.filter { manga ->
+
+                        adultEnabled ||
+                            (
+                                manga.attributes.contentRating != "pornographic" &&
+                                manga.attributes.contentRating != "erotica"
+                            )
+                    }
+
+            } catch (e: Exception) {
+
+                error =
+                    e.message
+                        ?: "Erreur réseau"
+
+            } finally {
+
+                loading = false
+            }
+        }
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -84,7 +151,8 @@ fun MangaReaderApp() {
 
         Text(
             text = "MangaReader",
-            style = MaterialTheme.typography.headlineMedium
+            style =
+                MaterialTheme.typography.headlineMedium
         )
 
         Spacer(
@@ -108,7 +176,8 @@ fun MangaReaderApp() {
                 Text("Rechercher un manga")
             },
             singleLine = true,
-            modifier = Modifier.fillMaxWidth()
+            modifier =
+                Modifier.fillMaxWidth()
         )
 
         Spacer(
@@ -117,19 +186,21 @@ fun MangaReaderApp() {
 
         Button(
             onClick = {
-                // Recherche MangaDex ajoutée à l'étape suivante
+                searchManga()
             },
-            modifier = Modifier.fillMaxWidth()
+            modifier =
+                Modifier.fillMaxWidth()
         ) {
             Text("Rechercher")
         }
 
         Spacer(
-            Modifier.height(16.dp)
+            Modifier.height(12.dp)
         )
 
         Row(
-            modifier = Modifier.fillMaxWidth(),
+            modifier =
+                Modifier.fillMaxWidth(),
             horizontalArrangement =
                 Arrangement.SpaceBetween
         ) {
@@ -142,6 +213,86 @@ fun MangaReaderApp() {
                     adultEnabled = it
                 }
             )
+        }
+
+        Spacer(
+            Modifier.height(12.dp)
+        )
+
+        if (loading) {
+
+            LinearProgressIndicator(
+                modifier =
+                    Modifier.fillMaxWidth()
+            )
+
+            Spacer(
+                Modifier.height(12.dp)
+            )
+        }
+
+        error?.let { message ->
+
+            Text(
+                text = "Erreur : $message"
+            )
+
+            Spacer(
+                Modifier.height(12.dp)
+            )
+        }
+
+        LazyColumn(
+            verticalArrangement =
+                Arrangement.spacedBy(8.dp)
+        ) {
+
+            items(
+                items = mangas,
+                key = { manga ->
+                    manga.id
+                }
+            ) { manga ->
+
+                Card(
+                    modifier =
+                        Modifier.fillMaxWidth()
+                ) {
+
+                    Column(
+                        modifier =
+                            Modifier.padding(16.dp)
+                    ) {
+
+                        Text(
+                            text =
+                                mangaTitle(manga),
+                            style =
+                                MaterialTheme
+                                    .typography
+                                    .titleMedium
+                        )
+
+                        Spacer(
+                            Modifier.height(4.dp)
+                        )
+
+                        Text(
+                            text = "MangaDex"
+                        )
+
+                        manga.attributes
+                            .contentRating
+                            ?.let { rating ->
+
+                                Text(
+                                    text =
+                                        "Classification : $rating"
+                                )
+                            }
+                    }
+                }
+            }
         }
     }
 }
