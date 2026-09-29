@@ -102,11 +102,23 @@ class MainActivity : ComponentActivity() {
         }
     }
 }
-
+enum class MangaSource(
+    val displayName: String
+) {
+    MANGADEX("MangaDex"),
+    JAPSCAN("Japscan"),
+    SUSHISCAN("SushiScan")
+}
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MangaReaderApp() {
+var selectedSource by remember {
+    mutableStateOf(MangaSource.MANGADEX)
+}
 
+var sourceMenuExpanded by remember {
+    mutableStateOf(false)
+}
     var search by remember { mutableStateOf("") }
     var adultEnabled by remember { mutableStateOf(true) }
 
@@ -420,12 +432,45 @@ pageUrls = files.map { fileName ->
 
                     // -------- RECHERCHE --------
 
-                    Spacer(Modifier.height(8.dp))
+                    Box(
+    modifier = Modifier.fillMaxWidth()
+) {
+    OutlinedButton(
+        onClick = {
+            sourceMenuExpanded = true
+        },
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Text("Source : ${selectedSource.displayName} ▼")
+    }
+
+    DropdownMenu(
+        expanded = sourceMenuExpanded,
+        onDismissRequest = {
+            sourceMenuExpanded = false
+        }
+    ) {
+        MangaSource.entries.forEach { source ->
+            DropdownMenuItem(
+                text = { Text(source.displayName) },
+                onClick = {
+                    selectedSource = source
+                    sourceMenuExpanded = false
+                    mangas = emptyList()
+                    search = ""
+                    error = null
+                }
+            )
+        }
+    }
+}
+
+Spacer(Modifier.height(8.dp))
 
                     OutlinedTextField(
                         value = search,
                         onValueChange = { search = it },
-                        label = { Text("Rechercher sur MangaDex") },
+                        label = { Text("Rechercher sur ${selectedSource.displayName}") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()
                     )
