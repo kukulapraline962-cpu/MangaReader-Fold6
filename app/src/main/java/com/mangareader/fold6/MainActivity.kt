@@ -92,6 +92,7 @@ interface MangaDexApi {
 object MangaDexClient {
 
     val api: MangaDexApi by lazy {
+
         Retrofit.Builder()
             .baseUrl("https://api.mangadex.org/")
             .addConverterFactory(
@@ -122,6 +123,14 @@ fun MangaReaderApp() {
 
     var search by remember {
         mutableStateOf("")
+    }
+
+    var selectedSource by remember {
+        mutableStateOf("MangaDex")
+    }
+
+    var sourceMenuOpen by remember {
+        mutableStateOf(false)
     }
 
     var adultEnabled by remember {
@@ -194,6 +203,16 @@ fun MangaReaderApp() {
             return
         }
 
+        if (selectedSource != "MangaDex") {
+
+            mangas = emptyList()
+
+            error =
+                "$selectedSource n'est pas encore connecté."
+
+            return
+        }
+
         scope.launch {
 
             loading = true
@@ -257,7 +276,8 @@ fun MangaReaderApp() {
                             offset = 0
                         )
 
-                chapters = result.data
+                chapters =
+                    result.data
 
                 chapterOffset =
                     result.data.size
@@ -683,9 +703,90 @@ fun MangaReaderApp() {
                 Modifier.height(16.dp)
             )
 
-            Text(
-                "Source : MangaDex"
-            )
+            Box(
+                modifier =
+                    Modifier.fillMaxWidth()
+            ) {
+
+                OutlinedButton(
+                    onClick = {
+                        sourceMenuOpen = true
+                    },
+                    modifier =
+                        Modifier.fillMaxWidth()
+                ) {
+
+                    Text(
+                        "Source : $selectedSource ▼"
+                    )
+                }
+
+                DropdownMenu(
+                    expanded =
+                        sourceMenuOpen,
+                    onDismissRequest = {
+                        sourceMenuOpen = false
+                    }
+                ) {
+
+                    DropdownMenuItem(
+                        text = {
+                            Text("MangaDex")
+                        },
+                        onClick = {
+                            selectedSource =
+                                "MangaDex"
+
+                            sourceMenuOpen =
+                                false
+
+                            mangas =
+                                emptyList()
+
+                            error =
+                                null
+                        }
+                    )
+
+                    DropdownMenuItem(
+                        text = {
+                            Text("Japscan")
+                        },
+                        onClick = {
+                            selectedSource =
+                                "Japscan"
+
+                            sourceMenuOpen =
+                                false
+
+                            mangas =
+                                emptyList()
+
+                            error =
+                                null
+                        }
+                    )
+
+                    DropdownMenuItem(
+                        text = {
+                            Text("SushiScan")
+                        },
+                        onClick = {
+                            selectedSource =
+                                "SushiScan"
+
+                            sourceMenuOpen =
+                                false
+
+                            mangas =
+                                emptyList()
+
+                            error =
+                                null
+                        }
+                    )
+                }
+            }
 
             Spacer(
                 Modifier.height(8.dp)
@@ -735,7 +836,8 @@ fun MangaReaderApp() {
                 Text("Contenu +18")
 
                 Switch(
-                    checked = adultEnabled,
+                    checked =
+                        adultEnabled,
                     onCheckedChange = {
                         adultEnabled = it
                     }
