@@ -10,14 +10,51 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.launch
+import retrofit2.Retrofit
+import retrofit2.converter.gson.GsonConverterFactory
+import retrofit2.http.GET
+import retrofit2.http.Query
 
-data class Manga(
-    val title: String,
-    val source: String,
-    val adult: Boolean = false
+// ---------- MangaDex API ----------
+
+data class MangaResponse(
+    val data: List<MangaData> = emptyList()
 )
 
+data class MangaData(
+    val id: String,
+    val attributes: MangaAttributes
+)
+
+data class MangaAttributes(
+    val title: Map<String, String> = emptyMap(),
+    val contentRating: String? = null
+)
+
+interface MangaDexApi {
+
+    @GET("manga")
+    suspend fun searchManga(
+        @Query("title") title: String,
+        @Query("limit") limit: Int = 30,
+        @Query("includes[]") includes: List<String> = listOf("cover_art")
+    ): MangaResponse
+}
+
+object MangaDexClient {
+
+    val api: MangaDexApi = Retrofit.Builder()
+        .baseUrl("https://api.mangadex.org/")
+        .addConverterFactory(GsonConverterFactory.create())
+        .build()
+        .create(MangaDexApi::class.java)
+}
+
+// ---------- Application ----------
+
 class MainActivity : ComponentActivity() {
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -30,84 +67,224 @@ class MainActivity : ComponentActivity() {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MangaReaderApp() {
+
     var search by remember { mutableStateOf("") }
 
-    // Contenu adulte activé par défaut.
-    var adultEnabled by remember { mutableStateOf(true) }
-
-    val mangas = remember {
-        listOf(
-            Manga("One Piece", "MangaDex"),
-            Manga("Berserk", "MangaDex"),
-            Manga("Chainsaw Man", "MangaDex"),
-            Manga("Exemple +18", "Source adulte", adult = true)
-        )
+    var adultEnabled by remember {
+        mutableStateOf(true)
     }
 
-    val visibleMangas = mangas.filter {
-        (adultEnabled || !it.adult) &&
-            (search.isBlank() || it.title.contains(search, ignoreCase = true))
+    var mangas by remember {
+        mutableStateOf<List<MangaData>>(emptyList())
+    }
+
+    var loading by remember {
+        mutableStateOf(false)
+    }
+
+    var error by remember {
+        mutableStateOf<String?>(null)
+    }
+
+    val scope = rememberCoroutineScope()
+
+    fun launchSearch() {
+
+        if (search.isBlank()) {
+            mangas = emptyList()
+            return
+        }
+
+        scope.launch {
+
+            loading = true
+            error = null
+
+            try {
+
+                val result =
+                    MangaDexClient.api.searchManga(search.trim())
+
+                mangas = result.data.filter {
+
+                    adultEnabled ||
+                        (
+                            it.attributes.contentRating != "pornographic" &&
+                            it.attributes.contentRating != "erotica"
+                        )
+                }
+
+            } catch (e: Exception) {
+
+                error = e.message ?: "Erreur réseau"
+
+            } finally {
+
+                loading = false
+            }
+        }
     }
 
     MaterialTheme {
+
         Scaffold(
+
             topBar = {
+
                 TopAppBar(
-                    title = { Text("MangaReader") }
+                    title = {
+                        Text("MangaReader")
+                    }
                 )
             }
+
         ) { padding ->
+
             Column(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(padding)
                     .padding(16.dp)
             ) {
+
                 OutlinedTextField(
+
                     value = search,
-                    onValueChange = { search = it },
-                    label = { Text("Rechercher un manga") },
-                    modifier = Modifier.fillMaxWidth()
+
+                    onValueChange = {
+                        search = it
+                    },
+
+                    label = {
+                        Text("Rechercher sur MangaDex")
+                    },
+
+                    singleLine = true,
+
+                    modifier =
+                        Modifier.fillMaxWidth()
                 )
 
-                Spacer(Modifier.height(12.dp))
+                Spacer(
+                    Modifier.height(8.dp)
+                )
+
+                Button(
+
+                    onClick = {
+                        launchSearch()
+                    },
+
+                    modifier =
+                        Modifier.fillMaxWidth()
+
+                ) {
+
+                    Text("Rechercher")
+                }
+
+                Spacer(
+                    Modifier.height(12.dp)
+                )
 
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
+                    modifier =
+                        Modifier.fillMaxWidth(),
+
+                    horizontalArrangement =
+                        Arrangement.SpaceBetween
                 ) {
+
                     Text("Contenu +18")
+
                     Switch(
-                        checked = adultEnabled,
-                        onCheckedChange = { adultEnabled = it }
+
+                        checked =
+                            adultEnabled,
+
+                        onCheckedChange = {
+                            adultEnabled = it
+
+                            if (search.isNotBlank()) {
+                                launchSearch()
+                            }
+                        }
                     )
                 }
 
-                Spacer(Modifier.height(12.dp))
+                Spacer(
+                    Modifier.height(12.dp)
+                )
+
+                if (loading) {
+
+                    LinearProgressIndicator(
+                        modifier =
+                            Modifier.fillMaxWidth()
+                    )
+
+                    Spacer(
+                        Modifier.height(12.dp)
+                    )
+                }
+
+                error?.let {
+
+                    Text(
+                        text = "Erreur : $it"
+                    )
+
+                    Spacer(
+                        Modifier.height(12.dp)
+                    )
+                }
 
                 LazyColumn(
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+
+                    verticalArrangement =
+                        Arrangement.spacedBy(8.dp)
+
                 ) {
-                    items(visibleMangas) { manga ->
+
+                    items(
+                        items = mangas,
+                        key = { it.id }
+                    ) { manga ->
+
+                        val title =
+                            manga.attributes.title["fr"]
+                                ?: manga.attributes.title["en"]
+                                ?: manga.attributes.title.values.firstOrNull()
+                                ?: "Sans titre"
+
                         Card(
-                            modifier = Modifier.fillMaxWidth()
+                            modifier =
+                                Modifier.fillMaxWidth()
                         ) {
+
                             Column(
-                                modifier = Modifier.padding(16.dp)
+                                modifier =
+                                    Modifier.padding(16.dp)
                             ) {
+
                                 Text(
-                                    text = manga.title,
-                                    style = MaterialTheme.typography.titleMedium
-                                )
-                                Text(
-                                    text = manga.source,
-                                    style = MaterialTheme.typography.bodyMedium
+                                    text = title,
+                                    style =
+                                        MaterialTheme.typography.titleMedium
                                 )
 
-                                if (manga.adult) {
+                                Text(
+                                    text = "MangaDex",
+                                    style =
+                                        MaterialTheme.typography.bodyMedium
+                                )
+
+                                manga.attributes.contentRating?.let { rating ->
+
                                     Text(
-                                        text = "18+",
-                                        style = MaterialTheme.typography.labelMedium
+                                        text = "Classification : $rating",
+                                        style =
+                                            MaterialTheme.typography.labelMedium
                                     )
                                 }
                             }
