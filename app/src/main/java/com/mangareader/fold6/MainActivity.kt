@@ -156,7 +156,17 @@ var sourceMenuExpanded by remember {
 
     fun searchManga() {
         if (search.isBlank()) return
+        if (selectedSource != MangaSource.MANGADEX) {
+    mangas = emptyList()
 
+    error = when (selectedSource) {
+        MangaSource.JAPSCAN -> "Japscan : source pas encore connectée."
+        MangaSource.SUSHISCAN -> "SushiScan : source pas encore connectée."
+        else -> null
+    }
+
+    return
+}
         scope.launch {
             loading = true
             error = null
