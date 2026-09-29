@@ -18,8 +18,13 @@ import kotlinx.coroutines.launch
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 import retrofit2.http.GET
+import retrofit2.http.Header
 import retrofit2.http.Path
 import retrofit2.http.Query
+
+// -------------------------
+// MANGADEX
+// -------------------------
 
 data class MangaResponse(
     val data: List<MangaData> = emptyList()
@@ -103,6 +108,52 @@ object MangaDexClient {
     }
 }
 
+// -------------------------
+// MANGAPDF
+// -------------------------
+
+data class MangaPdfSearchResponse(
+    val items: List<MangaPdfItem> = emptyList(),
+    val has_next: Boolean = false
+)
+
+data class MangaPdfItem(
+    val id: String,
+    val title: String,
+    val thumbnail_url: String? = null
+)
+
+interface MangaPdfApi {
+
+    @GET("api/v1/mihon/search")
+    suspend fun searchManga(
+        @Header("X-Client")
+        client: String = "api-consumer",
+        @Query("q")
+        query: String,
+        @Query("page")
+        page: Int = 1
+    ): MangaPdfSearchResponse
+}
+
+object MangaPdfClient {
+
+    val api: MangaPdfApi by lazy {
+
+        Retrofit.Builder()
+            .baseUrl("https://api.coffeemanga.shop/")
+            .addConverterFactory(
+                GsonConverterFactory.create()
+            )
+            .build()
+            .create(MangaPdfApi::class.java)
+    }
+}
+
+// -------------------------
+// APPLICATION
+// -------------------------
+
 class MainActivity : ComponentActivity() {
 
     override fun onCreate(
@@ -139,6 +190,12 @@ fun MangaReaderApp() {
 
     var mangas by remember {
         mutableStateOf<List<MangaData>>(
+            emptyList()
+        )
+    }
+
+    var mangaPdfResults by remember {
+        mutableStateOf<List<MangaPdfItem>>(
             emptyList()
         )
     }
@@ -203,42 +260,57 @@ fun MangaReaderApp() {
             return
         }
 
-        if (selectedSource != "MangaDex") {
-
-            mangas = emptyList()
-
-            error =
-                "$selectedSource n'est pas encore connecté."
-
-            return
-        }
-
         scope.launch {
 
             loading = true
             error = null
 
+            mangas = emptyList()
+            mangaPdfResults = emptyList()
+
             try {
 
-                val result =
-                    MangaDexClient.api
-                        .searchManga(
-                            search.trim()
-                        )
+                if (selectedSource == "MangaDex") {
 
-                mangas =
-                    result.data.filter { manga ->
-
-                        adultEnabled ||
-                            (
-                                manga.attributes
-                                    .contentRating !=
-                                    "pornographic" &&
-                                manga.attributes
-                                    .contentRating !=
-                                    "erotica"
+                    val result =
+                        MangaDexClient.api
+                            .searchManga(
+                                search.trim()
                             )
-                    }
+
+                    mangas =
+                        result.data.filter { manga ->
+
+                            adultEnabled ||
+                                (
+                                    manga.attributes
+                                        .contentRating !=
+                                        "pornographic" &&
+                                    manga.attributes
+                                        .contentRating !=
+                                        "erotica"
+                                )
+                        }
+
+                } else if (
+                    selectedSource == "MangaPDF"
+                ) {
+
+                    val result =
+                        MangaPdfClient.api
+                            .searchManga(
+                                query =
+                                    search.trim()
+                            )
+
+                    mangaPdfResults =
+                        result.items
+
+                } else {
+
+                    error =
+                        "$selectedSource n'est pas encore connecté."
+                }
 
             } catch (e: Exception) {
 
@@ -432,6 +504,10 @@ fun MangaReaderApp() {
             .padding(16.dp)
     ) {
 
+        // -------------------------
+        // LECTEUR MANGADEX
+        // -------------------------
+
         if (selectedChapter != null) {
 
             TextButton(
@@ -483,17 +559,6 @@ fun MangaReaderApp() {
                 )
             }
 
-            if (
-                !loading &&
-                pageUrls.isEmpty() &&
-                error == null
-            ) {
-
-                Text(
-                    "Aucune page disponible."
-                )
-            }
-
             LazyColumn(
                 modifier =
                     Modifier.fillMaxSize()
@@ -514,6 +579,10 @@ fun MangaReaderApp() {
                     )
                 }
             }
+
+        // -------------------------
+        // CHAPITRES MANGADEX
+        // -------------------------
 
         } else if (selectedManga != null) {
 
@@ -560,17 +629,6 @@ fun MangaReaderApp() {
 
                 Spacer(
                     Modifier.height(12.dp)
-                )
-            }
-
-            if (
-                !loading &&
-                chapters.isEmpty() &&
-                error == null
-            ) {
-
-                Text(
-                    "Aucun chapitre français trouvé."
                 )
             }
 
@@ -654,10 +712,6 @@ fun MangaReaderApp() {
 
                     item {
 
-                        Spacer(
-                            Modifier.height(8.dp)
-                        )
-
                         Button(
                             onClick = {
                                 loadMoreChapters()
@@ -688,6 +742,10 @@ fun MangaReaderApp() {
                     }
                 }
             }
+
+        // -------------------------
+        // ACCUEIL
+        // -------------------------
 
         } else {
 
@@ -734,6 +792,7 @@ fun MangaReaderApp() {
                             Text("MangaDex")
                         },
                         onClick = {
+
                             selectedSource =
                                 "MangaDex"
 
@@ -743,18 +802,21 @@ fun MangaReaderApp() {
                             mangas =
                                 emptyList()
 
-                            error =
-                                null
+                            mangaPdfResults =
+                                emptyList()
+
+                            error = null
                         }
                     )
 
                     DropdownMenuItem(
                         text = {
-                            Text("Japscan")
+                            Text("MangaPDF")
                         },
                         onClick = {
+
                             selectedSource =
-                                "Japscan"
+                                "MangaPDF"
 
                             sourceMenuOpen =
                                 false
@@ -762,8 +824,10 @@ fun MangaReaderApp() {
                             mangas =
                                 emptyList()
 
-                            error =
-                                null
+                            mangaPdfResults =
+                                emptyList()
+
+                            error = null
                         }
                     )
 
@@ -772,6 +836,7 @@ fun MangaReaderApp() {
                             Text("SushiScan")
                         },
                         onClick = {
+
                             selectedSource =
                                 "SushiScan"
 
@@ -781,8 +846,10 @@ fun MangaReaderApp() {
                             mangas =
                                 emptyList()
 
-                            error =
-                                null
+                            mangaPdfResults =
+                                emptyList()
+
+                            error = null
                         }
                     )
                 }
@@ -826,27 +893,30 @@ fun MangaReaderApp() {
                 Modifier.height(12.dp)
             )
 
-            Row(
-                modifier =
-                    Modifier.fillMaxWidth(),
-                horizontalArrangement =
-                    Arrangement.SpaceBetween
-            ) {
+            if (selectedSource == "MangaDex") {
 
-                Text("Contenu +18")
+                Row(
+                    modifier =
+                        Modifier.fillMaxWidth(),
+                    horizontalArrangement =
+                        Arrangement.SpaceBetween
+                ) {
 
-                Switch(
-                    checked =
-                        adultEnabled,
-                    onCheckedChange = {
-                        adultEnabled = it
-                    }
+                    Text("Contenu +18")
+
+                    Switch(
+                        checked =
+                            adultEnabled,
+                        onCheckedChange = {
+                            adultEnabled = it
+                        }
+                    )
+                }
+
+                Spacer(
+                    Modifier.height(12.dp)
                 )
             }
-
-            Spacer(
-                Modifier.height(12.dp)
-            )
 
             if (loading) {
 
@@ -871,64 +941,171 @@ fun MangaReaderApp() {
                 )
             }
 
-            LazyColumn(
-                verticalArrangement =
-                    Arrangement.spacedBy(8.dp)
-            ) {
+            // -------------------------
+            // RESULTATS MANGADEX
+            // -------------------------
 
-                items(
-                    items = mangas,
-                    key = { manga ->
-                        manga.id
-                    }
-                ) { manga ->
+            if (selectedSource == "MangaDex") {
 
-                    Card(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable {
-                                openManga(
-                                    manga
-                                )
-                            }
-                    ) {
+                LazyColumn(
+                    verticalArrangement =
+                        Arrangement.spacedBy(8.dp)
+                ) {
 
-                        Column(
-                            modifier =
-                                Modifier.padding(
-                                    16.dp
-                                )
-                        ) {
+                    items(
+                        items = mangas,
+                        key = { manga ->
+                            manga.id
+                        }
+                    ) { manga ->
 
-                            Text(
-                                text =
-                                    mangaTitle(
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    openManga(
                                         manga
-                                    ),
-                                style =
-                                    MaterialTheme
-                                        .typography
-                                        .titleMedium
-                            )
-
-                            Text("MangaDex")
-
-                            manga.attributes
-                                .contentRating
-                                ?.let { rating ->
-
-                                    Text(
-                                        "Classification : $rating"
                                     )
                                 }
+                        ) {
 
-                            Spacer(
-                                Modifier.height(4.dp)
-                            )
+                            Column(
+                                modifier =
+                                    Modifier.padding(
+                                        16.dp
+                                    )
+                            ) {
 
-                            Text(
-                                "Appuyer pour voir les chapitres →"
-                            )
+                                Text(
+                                    text =
+                                        mangaTitle(
+                                            manga
+                                        ),
+                                    style =
+                                        MaterialTheme
+                                            .typography
+                                            .titleMedium
+                                )
+
+                                Text("MangaDex")
+
+                                manga.attributes
+                                    .contentRating
+                                    ?.let { rating ->
+
+                                        Text(
+                                            "Classification : $rating"
+                                        )
+                                    }
+
+                                Spacer(
+                                    Modifier.height(4.dp)
+                                )
+
+                                Text(
+                                    "Appuyer pour voir les chapitres →"
+                                )
+                            }
+                        }
+                    }
+                }
+
+            // -------------------------
+            // RESULTATS MANGAPDF
+            // -------------------------
+
+            } else if (
+                selectedSource == "MangaPDF"
+            ) {
+
+                LazyColumn(
+                    verticalArrangement =
+                        Arrangement.spacedBy(8.dp)
+                ) {
+
+                    items(
+                        items =
+                            mangaPdfResults,
+                        key = { manga ->
+                            manga.id
+                        }
+                    ) { manga ->
+
+                        Card(
+                            modifier =
+                                Modifier.fillMaxWidth()
+                        ) {
+
+                            Row(
+                                modifier =
+                                    Modifier.padding(
+                                        12.dp
+                                    )
+                            ) {
+
+                                manga.thumbnail_url
+                                    ?.let { cover ->
+
+                                        AsyncImage(
+                                            model = cover,
+                                            contentDescription =
+                                                "Couverture ${manga.title}",
+                                            modifier =
+                                                Modifier
+                                                    .width(
+                                                        80.dp
+                                                    )
+                                                    .height(
+                                                        110.dp
+                                                    ),
+                                            contentScale =
+                                                ContentScale.Crop
+                                        )
+
+                                        Spacer(
+                                            Modifier.width(
+                                                12.dp
+                                            )
+                                        )
+                                    }
+
+                                Column(
+                                    modifier =
+                                        Modifier.weight(
+                                            1f
+                                        )
+                                ) {
+
+                                    Text(
+                                        text =
+                                            manga.title,
+                                        style =
+                                            MaterialTheme
+                                                .typography
+                                                .titleMedium
+                                    )
+
+                                    Spacer(
+                                        Modifier.height(
+                                            4.dp
+                                        )
+                                    )
+
+                                    Text(
+                                        "MangaPDF"
+                                    )
+
+                                    Spacer(
+                                        Modifier.height(
+                                            6.dp
+                                        )
+                                    )
+
+                                    Text(
+                                        "Recherche connectée ✓"
+                                    )
+                                }
+                            }
                         }
                     }
                 }
