@@ -19,8 +19,6 @@ import retrofit2.http.GET
 import retrofit2.http.Path
 import retrofit2.http.Query
 
-// ---------- MangaDex API ----------
-
 data class MangaResponse(
     val data: List<MangaData> = emptyList()
 )
@@ -76,8 +74,6 @@ object MangaDexClient {
         .create(MangaDexApi::class.java)
 }
 
-// ---------- Application ----------
-
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -94,19 +90,9 @@ fun MangaReaderApp() {
 
     var search by remember { mutableStateOf("") }
     var adultEnabled by remember { mutableStateOf(true) }
-
-    var mangas by remember {
-        mutableStateOf<List<MangaData>>(emptyList())
-    }
-
-    var selectedManga by remember {
-        mutableStateOf<MangaData?>(null)
-    }
-
-    var chapters by remember {
-        mutableStateOf<List<ChapterData>>(emptyList())
-    }
-
+    var mangas by remember { mutableStateOf<List<MangaData>>(emptyList()) }
+    var selectedManga by remember { mutableStateOf<MangaData?>(null) }
+    var chapters by remember { mutableStateOf<List<ChapterData>>(emptyList()) }
     var loading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
 
@@ -153,8 +139,7 @@ fun MangaReaderApp() {
             error = null
 
             try {
-                val result = MangaDexClient.api.getChapters(manga.id)
-                chapters = result.data
+                chapters = MangaDexClient.api.getChapters(manga.id).data
             } catch (e: Exception) {
                 error = e.message ?: "Impossible de charger les chapitres"
             } finally {
@@ -179,19 +164,13 @@ fun MangaReaderApp() {
                 TopAppBar(
                     title = {
                         Text(
-                            selectedManga?.let {
-                                mangaTitle(it)
-                            } ?: "MangaReader"
+                            selectedManga?.let { mangaTitle(it) }
+                                ?: "MangaReader"
                         )
                     },
-
                     navigationIcon = {
                         if (selectedManga != null) {
-                            TextButton(
-                                onClick = {
-                                    goBack()
-                                }
-                            ) {
+                            TextButton(onClick = { goBack() }) {
                                 Text("← Retour")
                             }
                         }
@@ -209,16 +188,10 @@ fun MangaReaderApp() {
 
                 if (selectedManga == null) {
 
-                    // ---------- Recherche ----------
-
                     OutlinedTextField(
                         value = search,
-                        onValueChange = {
-                            search = it
-                        },
-                        label = {
-                            Text("Rechercher sur MangaDex")
-                        },
+                        onValueChange = { search = it },
+                        label = { Text("Rechercher sur MangaDex") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()
                     )
@@ -226,7 +199,159 @@ fun MangaReaderApp() {
                     Spacer(Modifier.height(8.dp))
 
                     Button(
-                        onClick = {
-                            searchManga()
-                        },
-                        modifier =
+                        onClick = { searchManga() },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Rechercher")
+                    }
+                                        Spacer(Modifier.height(12.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text("Contenu +18")
+
+                        Switch(
+                            checked = adultEnabled,
+                            onCheckedChange = {
+                                adultEnabled = it
+
+                                if (search.isNotBlank()) {
+                                    searchManga()
+                                }
+                            }
+                        )
+                    }
+
+                    Spacer(Modifier.height(12.dp))
+
+                    if (loading) {
+                        LinearProgressIndicator(
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Spacer(Modifier.height(12.dp))
+                    }
+
+                    error?.let { message ->
+                        Text(text = "Erreur : $message")
+                        Spacer(Modifier.height(12.dp))
+                    }
+
+                    LazyColumn(
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        items(
+                            items = mangas,
+                            key = { manga -> manga.id }
+                        ) { manga ->
+
+                            Card(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        openManga(manga)
+                                    }
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(16.dp)
+                                ) {
+                                    Text(
+                                        text = mangaTitle(manga),
+                                        style = MaterialTheme.typography.titleMedium
+                                    )
+
+                                    Text(text = "MangaDex")
+
+                                    manga.attributes.contentRating?.let { rating ->
+                                        Text(
+                                            text = "Classification : $rating",
+                                            style = MaterialTheme.typography.labelMedium
+                                        )
+                                    }
+
+                                    Spacer(Modifier.height(4.dp))
+
+                                    Text(
+                                        text = "Appuyer pour voir les chapitres →",
+                                        style = MaterialTheme.typography.labelMedium
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                } else {
+
+                    // Écran des chapitres
+
+                    if (loading) {
+                        LinearProgressIndicator(
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Spacer(Modifier.height(16.dp))
+                    }
+
+                    error?.let { message ->
+                        Text(text = "Erreur : $message")
+                        Spacer(Modifier.height(12.dp))
+                    }
+
+                    if (!loading && chapters.isEmpty() && error == null) {
+                        Text(text = "Aucun chapitre français trouvé.")
+                    }
+
+                    LazyColumn(
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        items(
+                            items = chapters,
+                            key = { chapter -> chapter.id }
+                        ) { chapter ->
+
+                            Card(
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(16.dp)
+                                ) {
+                                    val number =
+                                        chapter.attributes.chapter ?: "?"
+
+                                    Text(
+                                        text = "Chapitre $number",
+                                        style = MaterialTheme.typography.titleMedium
+                                    )
+
+                                    val chapterTitle =
+                                        chapter.attributes.title
+
+                                    if (!chapterTitle.isNullOrBlank()) {
+                                        Text(text = chapterTitle)
+                                    }
+
+                                    val volume =
+                                        chapter.attributes.volume
+
+                                    if (!volume.isNullOrBlank()) {
+                                        Text(
+                                            text = "Volume $volume",
+                                            style = MaterialTheme.typography.labelMedium
+                                        )
+                                    }
+
+                                    Text(
+                                        text = "Langue : ${
+                                            chapter.attributes.translatedLanguage ?: "?"
+                                        }",
+                                        style = MaterialTheme.typography.labelMedium
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
