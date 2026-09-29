@@ -22,9 +22,9 @@ import retrofit2.http.Header
 import retrofit2.http.Path
 import retrofit2.http.Query
 
-// -------------------------
+// =====================================================
 // MANGADEX
-// -------------------------
+// =====================================================
 
 data class MangaResponse(
     val data: List<MangaData> = emptyList()
@@ -71,13 +71,16 @@ interface MangaDexApi {
 
     @GET("manga")
     suspend fun searchManga(
-        @Query("title") title: String,
-        @Query("limit") limit: Int = 30
+        @Query("title")
+        title: String,
+        @Query("limit")
+        limit: Int = 30
     ): MangaResponse
 
     @GET("manga/{id}/feed")
     suspend fun getChapters(
-        @Path("id") mangaId: String,
+        @Path("id")
+        mangaId: String,
         @Query("translatedLanguage[]")
         languages: List<String> = listOf("fr"),
         @Query("order[chapter]")
@@ -90,7 +93,8 @@ interface MangaDexApi {
 
     @GET("at-home/server/{chapterId}")
     suspend fun getChapterPages(
-        @Path("chapterId") chapterId: String
+        @Path("chapterId")
+        chapterId: String
     ): AtHomeResponse
 }
 
@@ -99,7 +103,9 @@ object MangaDexClient {
     val api: MangaDexApi by lazy {
 
         Retrofit.Builder()
-            .baseUrl("https://api.mangadex.org/")
+            .baseUrl(
+                "https://api.mangadex.org/"
+            )
             .addConverterFactory(
                 GsonConverterFactory.create()
             )
@@ -108,9 +114,9 @@ object MangaDexClient {
     }
 }
 
-// -------------------------
+// =====================================================
 // MANGAPDF
-// -------------------------
+// =====================================================
 
 data class MangaPdfSearchResponse(
     val items: List<MangaPdfItem> = emptyList(),
@@ -141,7 +147,12 @@ object MangaPdfClient {
     val api: MangaPdfApi by lazy {
 
         Retrofit.Builder()
-            .baseUrl("https://api.coffeemanga.shop/")
+
+            // Serveur alternatif MangaPDF
+            .baseUrl(
+                "https://api.mangapdf.org/"
+            )
+
             .addConverterFactory(
                 GsonConverterFactory.create()
             )
@@ -150,24 +161,31 @@ object MangaPdfClient {
     }
 }
 
-// -------------------------
-// APPLICATION
-// -------------------------
+// =====================================================
+// ACTIVITY
+// =====================================================
 
 class MainActivity : ComponentActivity() {
 
     override fun onCreate(
         savedInstanceState: Bundle?
     ) {
+
         super.onCreate(savedInstanceState)
 
         setContent {
+
             MaterialTheme {
+
                 MangaReaderApp()
             }
         }
     }
 }
+
+// =====================================================
+// APPLICATION
+// =====================================================
 
 @Composable
 fun MangaReaderApp() {
@@ -189,32 +207,42 @@ fun MangaReaderApp() {
     }
 
     var mangas by remember {
+
         mutableStateOf<List<MangaData>>(
             emptyList()
         )
     }
 
     var mangaPdfResults by remember {
+
         mutableStateOf<List<MangaPdfItem>>(
             emptyList()
         )
     }
 
     var selectedManga by remember {
-        mutableStateOf<MangaData?>(null)
+
+        mutableStateOf<MangaData?>(
+            null
+        )
     }
 
     var chapters by remember {
+
         mutableStateOf<List<ChapterData>>(
             emptyList()
         )
     }
 
     var selectedChapter by remember {
-        mutableStateOf<ChapterData?>(null)
+
+        mutableStateOf<ChapterData?>(
+            null
+        )
     }
 
     var pageUrls by remember {
+
         mutableStateOf<List<String>>(
             emptyList()
         )
@@ -237,22 +265,43 @@ fun MangaReaderApp() {
     }
 
     var error by remember {
-        mutableStateOf<String?>(null)
+
+        mutableStateOf<String?>(
+            null
+        )
     }
 
-    val scope = rememberCoroutineScope()
+    val scope =
+        rememberCoroutineScope()
+
+    // =================================================
+    // TITRE MANGADEX
+    // =================================================
 
     fun mangaTitle(
         manga: MangaData
     ): String {
 
-        return manga.attributes.title["fr"]
-            ?: manga.attributes.title["en"]
-            ?: manga.attributes.title
+        return manga
+            .attributes
+            .title["fr"]
+
+            ?: manga
+                .attributes
+                .title["en"]
+
+            ?: manga
+                .attributes
+                .title
                 .values
                 .firstOrNull()
+
             ?: "Sans titre"
     }
+
+    // =================================================
+    // RECHERCHE
+    // =================================================
 
     fun searchManga() {
 
@@ -265,51 +314,63 @@ fun MangaReaderApp() {
             loading = true
             error = null
 
-            mangas = emptyList()
-            mangaPdfResults = emptyList()
+            mangas =
+                emptyList()
+
+            mangaPdfResults =
+                emptyList()
 
             try {
 
-                if (selectedSource == "MangaDex") {
+                when (selectedSource) {
 
-                    val result =
-                        MangaDexClient.api
-                            .searchManga(
-                                search.trim()
-                            )
+                    "MangaDex" -> {
 
-                    mangas =
-                        result.data.filter { manga ->
-
-                            adultEnabled ||
-                                (
-                                    manga.attributes
-                                        .contentRating !=
-                                        "pornographic" &&
-                                    manga.attributes
-                                        .contentRating !=
-                                        "erotica"
-                                )
-                        }
-
-                } else if (
-                    selectedSource == "MangaPDF"
-                ) {
-
-                    val result =
-                        MangaPdfClient.api
-                            .searchManga(
-                                query =
+                        val result =
+                            MangaDexClient
+                                .api
+                                .searchManga(
                                     search.trim()
-                            )
+                                )
 
-                    mangaPdfResults =
-                        result.items
+                        mangas =
+                            result.data.filter {
+                                    manga ->
 
-                } else {
+                                adultEnabled ||
+                                    (
+                                        manga
+                                            .attributes
+                                            .contentRating !=
+                                            "pornographic" &&
 
-                    error =
-                        "$selectedSource n'est pas encore connecté."
+                                        manga
+                                            .attributes
+                                            .contentRating !=
+                                            "erotica"
+                                    )
+                            }
+                    }
+
+                    "MangaPDF" -> {
+
+                        val result =
+                            MangaPdfClient
+                                .api
+                                .searchManga(
+                                    query =
+                                        search.trim()
+                                )
+
+                        mangaPdfResults =
+                            result.items
+                    }
+
+                    else -> {
+
+                        error =
+                            "$selectedSource n'est pas encore connecté."
+                    }
                 }
 
             } catch (e: Exception) {
@@ -325,15 +386,28 @@ fun MangaReaderApp() {
         }
     }
 
+    // =================================================
+    // OUVRIR MANGA MANGADEX
+    // =================================================
+
     fun openManga(
         manga: MangaData
     ) {
 
-        selectedManga = manga
-        chapters = emptyList()
-        chapterOffset = 0
-        hasMoreChapters = false
-        error = null
+        selectedManga =
+            manga
+
+        chapters =
+            emptyList()
+
+        chapterOffset =
+            0
+
+        hasMoreChapters =
+            false
+
+        error =
+            null
 
         scope.launch {
 
@@ -342,9 +416,11 @@ fun MangaReaderApp() {
             try {
 
                 val result =
-                    MangaDexClient.api
+                    MangaDexClient
+                        .api
                         .getChapters(
-                            mangaId = manga.id,
+                            mangaId =
+                                manga.id,
                             offset = 0
                         )
 
@@ -370,10 +446,15 @@ fun MangaReaderApp() {
         }
     }
 
+    // =================================================
+    // PLUS DE CHAPITRES MANGADEX
+    // =================================================
+
     fun loadMoreChapters() {
 
         val manga =
-            selectedManga ?: return
+            selectedManga
+                ?: return
 
         if (loadingMore) {
             return
@@ -381,20 +462,27 @@ fun MangaReaderApp() {
 
         scope.launch {
 
-            loadingMore = true
-            error = null
+            loadingMore =
+                true
+
+            error =
+                null
 
             try {
 
                 val result =
-                    MangaDexClient.api
+                    MangaDexClient
+                        .api
                         .getChapters(
-                            mangaId = manga.id,
-                            offset = chapterOffset
+                            mangaId =
+                                manga.id,
+                            offset =
+                                chapterOffset
                         )
 
                 chapters =
-                    chapters + result.data
+                    chapters +
+                        result.data
 
                 chapterOffset +=
                     result.data.size
@@ -410,50 +498,78 @@ fun MangaReaderApp() {
 
             } finally {
 
-                loadingMore = false
+                loadingMore =
+                    false
             }
         }
     }
+
+    // =================================================
+    // LECTURE MANGADEX
+    // =================================================
 
     fun openChapter(
         chapter: ChapterData
     ) {
 
-        selectedChapter = chapter
-        pageUrls = emptyList()
-        error = null
+        selectedChapter =
+            chapter
+
+        pageUrls =
+            emptyList()
+
+        error =
+            null
 
         scope.launch {
 
-            loading = true
+            loading =
+                true
 
             try {
 
                 val result =
-                    MangaDexClient.api
+                    MangaDexClient
+                        .api
                         .getChapterPages(
                             chapter.id
                         )
 
                 val useDataSaver =
-                    result.chapter.data.isEmpty()
+                    result
+                        .chapter
+                        .data
+                        .isEmpty()
 
                 val files =
+
                     if (useDataSaver) {
-                        result.chapter.dataSaver
+
+                        result
+                            .chapter
+                            .dataSaver
+
                     } else {
-                        result.chapter.data
+
+                        result
+                            .chapter
+                            .data
                     }
 
                 val folder =
+
                     if (useDataSaver) {
+
                         "data-saver"
+
                     } else {
+
                         "data"
                     }
 
                 pageUrls =
-                    files.map { fileName ->
+                    files.map {
+                            fileName ->
 
                         "${result.baseUrl}/$folder/" +
                             "${result.chapter.hash}/$fileName"
@@ -467,26 +583,49 @@ fun MangaReaderApp() {
 
             } finally {
 
-                loading = false
+                loading =
+                    false
             }
         }
     }
 
+    // =================================================
+    // RETOUR
+    // =================================================
+
     fun goBack() {
 
-        if (selectedChapter != null) {
+        if (
+            selectedChapter != null
+        ) {
 
-            selectedChapter = null
-            pageUrls = emptyList()
-            error = null
+            selectedChapter =
+                null
 
-        } else if (selectedManga != null) {
+            pageUrls =
+                emptyList()
 
-            selectedManga = null
-            chapters = emptyList()
-            chapterOffset = 0
-            hasMoreChapters = false
-            error = null
+            error =
+                null
+
+        } else if (
+            selectedManga != null
+        ) {
+
+            selectedManga =
+                null
+
+            chapters =
+                emptyList()
+
+            chapterOffset =
+                0
+
+            hasMoreChapters =
+                false
+
+            error =
+                null
         }
     }
 
@@ -495,27 +634,40 @@ fun MangaReaderApp() {
             selectedManga != null ||
                 selectedChapter != null
     ) {
+
         goBack()
     }
 
+    // =================================================
+    // UI
+    // =================================================
+
     Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(16.dp)
+        modifier =
+            Modifier
+                .fillMaxSize()
+                .padding(
+                    16.dp
+                )
     ) {
 
-        // -------------------------
+        // =================================================
         // LECTEUR MANGADEX
-        // -------------------------
+        // =================================================
 
-        if (selectedChapter != null) {
+        if (
+            selectedChapter != null
+        ) {
 
             TextButton(
                 onClick = {
                     goBack()
                 }
             ) {
-                Text("← Retour")
+
+                Text(
+                    "← Retour"
+                )
             }
 
             Text(
@@ -533,65 +685,87 @@ fun MangaReaderApp() {
             )
 
             Spacer(
-                Modifier.height(12.dp)
+                Modifier.height(
+                    12.dp
+                )
             )
 
             if (loading) {
 
                 LinearProgressIndicator(
                     modifier =
-                        Modifier.fillMaxWidth()
+                        Modifier
+                            .fillMaxWidth()
                 )
 
                 Spacer(
-                    Modifier.height(12.dp)
+                    Modifier.height(
+                        12.dp
+                    )
                 )
             }
 
-            error?.let { message ->
+            error?.let {
+                    message ->
 
                 Text(
                     "Erreur : $message"
                 )
 
                 Spacer(
-                    Modifier.height(12.dp)
+                    Modifier.height(
+                        12.dp
+                    )
                 )
             }
 
             LazyColumn(
                 modifier =
-                    Modifier.fillMaxSize()
+                    Modifier
+                        .fillMaxSize()
             ) {
 
                 items(
-                    items = pageUrls
-                ) { pageUrl ->
+                    items =
+                        pageUrls
+                ) {
+                        pageUrl ->
 
                     AsyncImage(
-                        model = pageUrl,
+                        model =
+                            pageUrl,
+
                         contentDescription =
                             "Page du manga",
+
                         modifier =
-                            Modifier.fillMaxWidth(),
+                            Modifier
+                                .fillMaxWidth(),
+
                         contentScale =
-                            ContentScale.FillWidth
+                            ContentScale
+                                .FillWidth
                     )
                 }
             }
 
-        // -------------------------
+        // =================================================
         // CHAPITRES MANGADEX
-        // -------------------------
+        // =================================================
 
-        } else if (selectedManga != null) {
+        } else if (
+            selectedManga != null
+        ) {
 
             TextButton(
                 onClick = {
                     goBack()
                 }
             ) {
-                Text("← Retour")
+
+                Text(
+                    "← Retour"
+                )
             }
 
             Text(
@@ -599,6 +773,7 @@ fun MangaReaderApp() {
                     mangaTitle(
                         selectedManga!!
                     ),
+
                 style =
                     MaterialTheme
                         .typography
@@ -606,59 +781,78 @@ fun MangaReaderApp() {
             )
 
             Spacer(
-                Modifier.height(12.dp)
+                Modifier.height(
+                    12.dp
+                )
             )
 
             if (loading) {
 
                 LinearProgressIndicator(
                     modifier =
-                        Modifier.fillMaxWidth()
+                        Modifier
+                            .fillMaxWidth()
                 )
 
                 Spacer(
-                    Modifier.height(12.dp)
+                    Modifier.height(
+                        12.dp
+                    )
                 )
             }
 
-            error?.let { message ->
+            error?.let {
+                    message ->
 
                 Text(
                     "Erreur : $message"
                 )
 
                 Spacer(
-                    Modifier.height(12.dp)
+                    Modifier.height(
+                        12.dp
+                    )
                 )
             }
 
             LazyColumn(
                 verticalArrangement =
-                    Arrangement.spacedBy(8.dp)
+                    Arrangement
+                        .spacedBy(
+                            8.dp
+                        )
             ) {
 
                 items(
-                    items = chapters,
-                    key = { chapter ->
+                    items =
+                        chapters,
+
+                    key = {
+                            chapter ->
+
                         chapter.id
                     }
-                ) { chapter ->
+                ) {
+                        chapter ->
 
                     Card(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable {
-                                openChapter(
-                                    chapter
-                                )
-                            }
+                        modifier =
+                            Modifier
+                                .fillMaxWidth()
+                                .clickable {
+
+                                    openChapter(
+                                        chapter
+                                    )
+                                }
                     ) {
 
                         Column(
                             modifier =
-                                Modifier.padding(
-                                    16.dp
-                                )
+                                Modifier
+                                    .padding(
+                                        16.dp
+                                    )
                         ) {
 
                             Text(
@@ -669,28 +863,37 @@ fun MangaReaderApp() {
                                             .chapter
                                             ?: "?"
                                     }",
+
                                 style =
                                     MaterialTheme
                                         .typography
                                         .titleMedium
                             )
 
-                            chapter.attributes
+                            chapter
+                                .attributes
                                 .title
                                 ?.takeIf {
+
                                     it.isNotBlank()
                                 }
-                                ?.let { title ->
+                                ?.let {
+                                        title ->
 
-                                    Text(title)
+                                    Text(
+                                        title
+                                    )
                                 }
 
-                            chapter.attributes
+                            chapter
+                                .attributes
                                 .volume
                                 ?.takeIf {
+
                                     it.isNotBlank()
                                 }
-                                ?.let { volume ->
+                                ?.let {
+                                        volume ->
 
                                     Text(
                                         "Volume $volume"
@@ -698,7 +901,9 @@ fun MangaReaderApp() {
                                 }
 
                             Spacer(
-                                Modifier.height(4.dp)
+                                Modifier.height(
+                                    4.dp
+                                )
                             )
 
                             Text(
@@ -708,21 +913,29 @@ fun MangaReaderApp() {
                     }
                 }
 
-                if (hasMoreChapters) {
+                if (
+                    hasMoreChapters
+                ) {
 
                     item {
 
                         Button(
                             onClick = {
+
                                 loadMoreChapters()
                             },
+
                             enabled =
                                 !loadingMore,
+
                             modifier =
-                                Modifier.fillMaxWidth()
+                                Modifier
+                                    .fillMaxWidth()
                         ) {
 
-                            if (loadingMore) {
+                            if (
+                                loadingMore
+                            ) {
 
                                 Text(
                                     "Chargement..."
@@ -737,20 +950,24 @@ fun MangaReaderApp() {
                         }
 
                         Spacer(
-                            Modifier.height(16.dp)
+                            Modifier.height(
+                                16.dp
+                            )
                         )
                     }
                 }
             }
 
-        // -------------------------
+        // =================================================
         // ACCUEIL
-        // -------------------------
+        // =================================================
 
         } else {
 
             Text(
-                text = "MangaReader",
+                text =
+                    "MangaReader",
+
                 style =
                     MaterialTheme
                         .typography
@@ -758,20 +975,31 @@ fun MangaReaderApp() {
             )
 
             Spacer(
-                Modifier.height(16.dp)
+                Modifier.height(
+                    16.dp
+                )
             )
+
+            // =============================================
+            // SOURCE
+            // =============================================
 
             Box(
                 modifier =
-                    Modifier.fillMaxWidth()
+                    Modifier
+                        .fillMaxWidth()
             ) {
 
                 OutlinedButton(
                     onClick = {
-                        sourceMenuOpen = true
+
+                        sourceMenuOpen =
+                            true
                     },
+
                     modifier =
-                        Modifier.fillMaxWidth()
+                        Modifier
+                            .fillMaxWidth()
                 ) {
 
                     Text(
@@ -782,15 +1010,22 @@ fun MangaReaderApp() {
                 DropdownMenu(
                     expanded =
                         sourceMenuOpen,
+
                     onDismissRequest = {
-                        sourceMenuOpen = false
+
+                        sourceMenuOpen =
+                            false
                     }
                 ) {
 
                     DropdownMenuItem(
                         text = {
-                            Text("MangaDex")
+
+                            Text(
+                                "MangaDex"
+                            )
                         },
+
                         onClick = {
 
                             selectedSource =
@@ -805,14 +1040,19 @@ fun MangaReaderApp() {
                             mangaPdfResults =
                                 emptyList()
 
-                            error = null
+                            error =
+                                null
                         }
                     )
 
                     DropdownMenuItem(
                         text = {
-                            Text("MangaPDF")
+
+                            Text(
+                                "MangaPDF"
+                            )
                         },
+
                         onClick = {
 
                             selectedSource =
@@ -827,14 +1067,19 @@ fun MangaReaderApp() {
                             mangaPdfResults =
                                 emptyList()
 
-                            error = null
+                            error =
+                                null
                         }
                     )
 
                     DropdownMenuItem(
                         text = {
-                            Text("SushiScan")
+
+                            Text(
+                                "SushiScan"
+                            )
                         },
+
                         onClick = {
 
                             selectedSource =
@@ -849,131 +1094,202 @@ fun MangaReaderApp() {
                             mangaPdfResults =
                                 emptyList()
 
-                            error = null
+                            error =
+                                null
                         }
                     )
                 }
             }
 
             Spacer(
-                Modifier.height(8.dp)
+                Modifier.height(
+                    8.dp
+                )
             )
 
+            // =============================================
+            // RECHERCHE
+            // =============================================
+
             OutlinedTextField(
-                value = search,
+                value =
+                    search,
+
                 onValueChange = {
-                    search = it
+
+                    search =
+                        it
                 },
+
                 label = {
+
                     Text(
                         "Rechercher un manga"
                     )
                 },
-                singleLine = true,
+
+                singleLine =
+                    true,
+
                 modifier =
-                    Modifier.fillMaxWidth()
+                    Modifier
+                        .fillMaxWidth()
             )
 
             Spacer(
-                Modifier.height(8.dp)
+                Modifier.height(
+                    8.dp
+                )
             )
 
             Button(
                 onClick = {
+
                     searchManga()
                 },
+
                 modifier =
-                    Modifier.fillMaxWidth()
+                    Modifier
+                        .fillMaxWidth()
             ) {
 
-                Text("Rechercher")
+                Text(
+                    "Rechercher"
+                )
             }
 
             Spacer(
-                Modifier.height(12.dp)
+                Modifier.height(
+                    12.dp
+                )
             )
 
-            if (selectedSource == "MangaDex") {
+            // =============================================
+            // +18 MANGADEX
+            // =============================================
+
+            if (
+                selectedSource ==
+                "MangaDex"
+            ) {
 
                 Row(
                     modifier =
-                        Modifier.fillMaxWidth(),
+                        Modifier
+                            .fillMaxWidth(),
+
                     horizontalArrangement =
-                        Arrangement.SpaceBetween
+                        Arrangement
+                            .SpaceBetween
                 ) {
 
-                    Text("Contenu +18")
+                    Text(
+                        "Contenu +18"
+                    )
 
                     Switch(
                         checked =
                             adultEnabled,
+
                         onCheckedChange = {
-                            adultEnabled = it
+
+                            adultEnabled =
+                                it
                         }
                     )
                 }
 
                 Spacer(
-                    Modifier.height(12.dp)
+                    Modifier.height(
+                        12.dp
+                    )
                 )
             }
+
+            // =============================================
+            // CHARGEMENT
+            // =============================================
 
             if (loading) {
 
                 LinearProgressIndicator(
                     modifier =
-                        Modifier.fillMaxWidth()
+                        Modifier
+                            .fillMaxWidth()
                 )
 
                 Spacer(
-                    Modifier.height(12.dp)
+                    Modifier.height(
+                        12.dp
+                    )
                 )
             }
 
-            error?.let { message ->
+            // =============================================
+            // ERREUR
+            // =============================================
+
+            error?.let {
+                    message ->
 
                 Text(
                     "Erreur : $message"
                 )
 
                 Spacer(
-                    Modifier.height(12.dp)
+                    Modifier.height(
+                        12.dp
+                    )
                 )
             }
 
-            // -------------------------
+            // =============================================
             // RESULTATS MANGADEX
-            // -------------------------
+            // =============================================
 
-            if (selectedSource == "MangaDex") {
+            if (
+                selectedSource ==
+                "MangaDex"
+            ) {
 
                 LazyColumn(
                     verticalArrangement =
-                        Arrangement.spacedBy(8.dp)
+                        Arrangement
+                            .spacedBy(
+                                8.dp
+                            )
                 ) {
 
                     items(
-                        items = mangas,
-                        key = { manga ->
+                        items =
+                            mangas,
+
+                        key = {
+                                manga ->
+
                             manga.id
                         }
-                    ) { manga ->
+                    ) {
+                            manga ->
 
                         Card(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable {
-                                    openManga(
-                                        manga
-                                    )
-                                }
+                            modifier =
+                                Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+
+                                        openManga(
+                                            manga
+                                        )
+                                    }
                         ) {
 
                             Column(
                                 modifier =
-                                    Modifier.padding(
-                                        16.dp
-                                    )
+                                    Modifier
+                                        .padding(
+                                            16.dp
+                                        )
                             ) {
 
                                 Text(
@@ -981,17 +1297,22 @@ fun MangaReaderApp() {
                                         mangaTitle(
                                             manga
                                         ),
+
                                     style =
                                         MaterialTheme
                                             .typography
                                             .titleMedium
                                 )
 
-                                Text("MangaDex")
+                                Text(
+                                    "MangaDex"
+                                )
 
-                                manga.attributes
+                                manga
+                                    .attributes
                                     .contentRating
-                                    ?.let { rating ->
+                                    ?.let {
+                                            rating ->
 
                                         Text(
                                             "Classification : $rating"
@@ -999,7 +1320,9 @@ fun MangaReaderApp() {
                                     }
 
                                 Spacer(
-                                    Modifier.height(4.dp)
+                                    Modifier.height(
+                                        4.dp
+                                    )
                                 )
 
                                 Text(
@@ -1010,46 +1333,61 @@ fun MangaReaderApp() {
                     }
                 }
 
-            // -------------------------
+            // =============================================
             // RESULTATS MANGAPDF
-            // -------------------------
+            // =============================================
 
             } else if (
-                selectedSource == "MangaPDF"
+                selectedSource ==
+                "MangaPDF"
             ) {
 
                 LazyColumn(
                     verticalArrangement =
-                        Arrangement.spacedBy(8.dp)
+                        Arrangement
+                            .spacedBy(
+                                8.dp
+                            )
                 ) {
 
                     items(
                         items =
                             mangaPdfResults,
-                        key = { manga ->
+
+                        key = {
+                                manga ->
+
                             manga.id
                         }
-                    ) { manga ->
+                    ) {
+                            manga ->
 
                         Card(
                             modifier =
-                                Modifier.fillMaxWidth()
+                                Modifier
+                                    .fillMaxWidth()
                         ) {
 
                             Row(
                                 modifier =
-                                    Modifier.padding(
-                                        12.dp
-                                    )
+                                    Modifier
+                                        .padding(
+                                            12.dp
+                                        )
                             ) {
 
-                                manga.thumbnail_url
-                                    ?.let { cover ->
+                                manga
+                                    .thumbnail_url
+                                    ?.let {
+                                            cover ->
 
                                         AsyncImage(
-                                            model = cover,
+                                            model =
+                                                cover,
+
                                             contentDescription =
                                                 "Couverture ${manga.title}",
+
                                             modifier =
                                                 Modifier
                                                     .width(
@@ -1058,8 +1396,10 @@ fun MangaReaderApp() {
                                                     .height(
                                                         110.dp
                                                     ),
+
                                             contentScale =
-                                                ContentScale.Crop
+                                                ContentScale
+                                                    .Crop
                                         )
 
                                         Spacer(
@@ -1071,14 +1411,16 @@ fun MangaReaderApp() {
 
                                 Column(
                                     modifier =
-                                        Modifier.weight(
-                                            1f
-                                        )
+                                        Modifier
+                                            .weight(
+                                                1f
+                                            )
                                 ) {
 
                                     Text(
                                         text =
                                             manga.title,
+
                                         style =
                                             MaterialTheme
                                                 .typography
