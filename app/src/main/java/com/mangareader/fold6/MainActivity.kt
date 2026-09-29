@@ -13,15 +13,22 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
+import coil.request.ImageRequest
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import okhttp3.Headers
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 import retrofit2.http.GET
 import retrofit2.http.Path
 import retrofit2.http.Query
+import java.net.HttpURLConnection
+import java.net.URL
 
 // =====================================================
 // MANGADEX
@@ -206,46 +213,418 @@ object MangaSterClient {
 }
 
 // =====================================================
-// ANIME-SAMA
-// =====================================================
-//
-// Premier test : Blue Lock VF.
-//
-// L'endpoint renvoie une hashmap :
-// chapitre -> nombre de pages.
-//
-// Exemple conceptuel :
-// {
-//   "1": 52,
-//   "2": 45,
-//   ...
-// }
-//
+// ANIME-SAMA - MIROIR DIRECT
 // =====================================================
 
-interface AnimeSamaApi {
+data class AnimeSamaEntry(
+    val name: String,
+    val url: String,
+    val directory: Boolean
+)
 
-    @GET("s2/scans/get_nb_chap_et_img.php")
-    suspend fun getScanInfo(
-        @Query("oeuvre")
-        title: String
-    ): Map<String, Int>
-}
+data class AnimeSamaManga(
+    val name: String,
+    val url: String
+)
+
+data class AnimeSamaChapter(
+    val number: String,
+    val label: String,
+    val url: String
+)
 
 object AnimeSamaClient {
 
     const val BASE_URL =
-        "https://anime-sama.to/"
+        "https://s22.anime-sama.me/s1/scans/"
 
-    val api: AnimeSamaApi by lazy {
+    const val ORIGIN =
+        "https://s22.anime-sama.me/"
 
-        Retrofit.Builder()
-            .baseUrl(BASE_URL)
-            .addConverterFactory(
-                GsonConverterFactory.create()
+    const val USER_AGENT =
+        "Mozilla/5.0 Scanly/0.1"
+
+    suspend fun findManga(
+        query: String
+    ): AnimeSamaManga? =
+        withContext(Dispatchers.IO) {
+
+            val wanted =
+                normalizeForSearch(query)
+
+            val entries =
+                parseAutoIndex(
+                    getHtml(BASE_URL),
+                    BASE_URL
+                )
+                    .filter {
+                        it.directory
+                    }
+
+            val match =
+                entries.firstOrNull {
+
+                    normalizeForSearch(
+                        it.name
+                    ) == wanted
+
+                } ?: entries.firstOrNull {
+
+                    normalizeForSearch(
+                        it.name
+                    ).contains(wanted)
+                }
+
+            match?.let {
+
+                AnimeSamaManga(
+                    name = it.name,
+                    url = it.url
+                )
+            }
+        }
+
+    suspend fun getChapters(
+        mangaUrl: String
+    ): List<AnimeSamaChapter> =
+        withContext(Dispatchers.IO) {
+
+            parseAutoIndex(
+                getHtml(mangaUrl),
+                mangaUrl
             )
-            .build()
-            .create(AnimeSamaApi::class.java)
+                .filter {
+                    it.directory
+                }
+                .map { entry ->
+
+                    AnimeSamaChapter(
+                        number =
+                            chapterNumber(
+                                entry.name
+                            ),
+                        label =
+                            entry.name,
+                        url =
+                            entry.url
+                    )
+                }
+                .sortedByDescending {
+
+                    it.number
+                        .toDoubleOrNull()
+                        ?: -1.0
+                }
+        }
+
+    suspend fun getPages(
+        chapterUrl: String
+    ): List<String> =
+        withContext(Dispatchers.IO) {
+
+            parseAutoIndex(
+                getHtml(chapterUrl),
+                chapterUrl
+            )
+                .filter {
+
+                    !it.directory &&
+                        isImageName(
+                            it.name
+                        )
+                }
+                .sortedWith(
+                    compareBy<AnimeSamaEntry> {
+
+                        firstNumber(
+                            it.name
+                        ) ?: Double.MAX_VALUE
+
+                    }.thenBy {
+
+                        it.name.lowercase()
+                    }
+                )
+                .map {
+                    it.url
+                }
+        }
+
+    private fun getHtml(
+        url: String
+    ): String {
+
+        val connection =
+            URL(url)
+                .openConnection() as
+                HttpURLConnection
+
+        connection.instanceFollowRedirects =
+            true
+
+        connection.connectTimeout =
+            15_000
+
+        connection.readTimeout =
+            20_000
+
+        connection.setRequestProperty(
+            "User-Agent",
+            USER_AGENT
+        )
+
+        connection.setRequestProperty(
+            "Accept",
+            "text/html"
+        )
+
+        connection.setRequestProperty(
+            "Referer",
+            ORIGIN
+        )
+
+        try {
+
+            val responseCode =
+                connection.responseCode
+
+            val stream =
+                if (
+                    responseCode in 200..299
+                ) {
+
+                    connection.inputStream
+
+                } else {
+
+                    connection.errorStream
+                }
+
+            val body =
+                stream
+                    ?.bufferedReader()
+                    ?.use {
+                        it.readText()
+                    }
+                    .orEmpty()
+
+            if (
+                responseCode !in 200..299
+            ) {
+
+                throw IllegalStateException(
+                    "HTTP $responseCode"
+                )
+            }
+
+            return body
+
+        } finally {
+
+            connection.disconnect()
+        }
+    }
+
+    private fun parseAutoIndex(
+        html: String,
+        baseUrl: String
+    ): List<AnimeSamaEntry> {
+
+        val linkRegex =
+            Regex(
+                pattern =
+                    """<a\s+href=["']([^"']+)["'][^>]*>(.*?)</a>""",
+                options =
+                    setOf(
+                        RegexOption.IGNORE_CASE,
+                        RegexOption.DOT_MATCHES_ALL
+                    )
+            )
+
+        val tagRegex =
+            Regex(
+                "<[^>]+>"
+            )
+
+        return linkRegex
+            .findAll(html)
+            .mapNotNull { match ->
+
+                val href =
+                    unescapeHtml(
+                        match.groupValues[1]
+                    )
+                        .trim()
+
+                val inner =
+                    match.groupValues[2]
+
+                val visibleName =
+                    unescapeHtml(
+                        inner.replace(
+                            tagRegex,
+                            ""
+                        )
+                    )
+                        .trim()
+                        .removeSuffix("/")
+
+                if (
+                    href.isBlank() ||
+                    href == "../" ||
+                    visibleName.isBlank() ||
+                    visibleName.equals(
+                        "Parent Directory",
+                        ignoreCase = true
+                    ) ||
+                    href.startsWith("?")
+                ) {
+
+                    null
+
+                } else {
+
+                    val directory =
+                        href.endsWith("/") ||
+                            inner.contains(
+                                "Directory",
+                                ignoreCase = true
+                            ) ||
+                            inner.contains(
+                                "[DIR]",
+                                ignoreCase = true
+                            )
+
+                    AnimeSamaEntry(
+                        name =
+                            visibleName,
+                        url =
+                            URL(
+                                URL(baseUrl),
+                                href
+                            ).toString(),
+                        directory =
+                            directory
+                    )
+                }
+            }
+            .toList()
+    }
+
+    private fun normalizeForSearch(
+        value: String
+    ): String {
+
+        return unescapeHtml(
+            value
+        )
+            .lowercase()
+            .replace("-", " ")
+            .replace("_", " ")
+            .replace(
+                Regex("\\s+"),
+                " "
+            )
+            .trim()
+    }
+
+    private fun chapterNumber(
+        value: String
+    ): String {
+
+        return firstNumber(
+            value
+        )
+            ?.let {
+
+                if (
+                    it % 1.0 == 0.0
+                ) {
+
+                    it.toInt()
+                        .toString()
+
+                } else {
+
+                    it.toString()
+                }
+            }
+            ?: value
+    }
+
+    private fun firstNumber(
+        value: String
+    ): Double? {
+
+        val match =
+            Regex(
+                "(\\d+(?:[.,]\\d+)?)"
+            )
+                .find(value)
+                ?: return null
+
+        return match.value
+            .replace(",", ".")
+            .toDoubleOrNull()
+    }
+
+    private fun isImageName(
+        value: String
+    ): Boolean {
+
+        val lower =
+            value.lowercase()
+
+        return lower.endsWith(
+            ".jpg"
+        ) ||
+            lower.endsWith(
+                ".jpeg"
+            ) ||
+            lower.endsWith(
+                ".png"
+            ) ||
+            lower.endsWith(
+                ".webp"
+            ) ||
+            lower.endsWith(
+                ".gif"
+            )
+    }
+
+    private fun unescapeHtml(
+        value: String
+    ): String {
+
+        return value
+            .replace(
+                "&amp;",
+                "&"
+            )
+            .replace(
+                "&quot;",
+                "\""
+            )
+            .replace(
+                "&#039;",
+                "'"
+            )
+            .replace(
+                "&apos;",
+                "'"
+            )
+            .replace(
+                "&lt;",
+                "<"
+            )
+            .replace(
+                "&gt;",
+                ">"
+            )
+            .replace(
+                "&nbsp;",
+                " "
+            )
     }
 }
 
@@ -253,13 +632,16 @@ object AnimeSamaClient {
 // MAIN ACTIVITY
 // =====================================================
 
-class MainActivity : ComponentActivity() {
+class MainActivity :
+    ComponentActivity() {
 
     override fun onCreate(
         savedInstanceState: Bundle?
     ) {
 
-        super.onCreate(savedInstanceState)
+        super.onCreate(
+            savedInstanceState
+        )
 
         setContent {
 
@@ -275,19 +657,26 @@ class MainActivity : ComponentActivity() {
 // APP
 // =====================================================
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(
+    ExperimentalMaterial3Api::class
+)
 @Composable
 fun MangaReaderApp() {
 
     val scope =
         rememberCoroutineScope()
 
+    val context =
+        LocalContext.current
+
     var search by remember {
         mutableStateOf("")
     }
 
     var selectedSource by remember {
-        mutableStateOf("MangaDex")
+        mutableStateOf(
+            "MangaDex"
+        )
     }
 
     var sourceMenuOpen by remember {
@@ -303,23 +692,35 @@ fun MangaReaderApp() {
     // =================================================
 
     var mangas by remember {
-        mutableStateOf<List<MangaData>>(
+        mutableStateOf<
+            List<MangaData>
+        >(
             emptyList()
         )
     }
 
     var selectedManga by remember {
-        mutableStateOf<MangaData?>(null)
+        mutableStateOf<
+            MangaData?
+        >(
+            null
+        )
     }
 
     var chapters by remember {
-        mutableStateOf<List<ChapterData>>(
+        mutableStateOf<
+            List<ChapterData>
+        >(
             emptyList()
         )
     }
 
     var selectedChapter by remember {
-        mutableStateOf<ChapterData?>(null)
+        mutableStateOf<
+            ChapterData?
+        >(
+            null
+        )
     }
 
     var chapterOffset by remember {
@@ -335,23 +736,35 @@ fun MangaReaderApp() {
     // =================================================
 
     var mangaSterResults by remember {
-        mutableStateOf<List<MangaSterManga>>(
+        mutableStateOf<
+            List<MangaSterManga>
+        >(
             emptyList()
         )
     }
 
     var selectedMangaSter by remember {
-        mutableStateOf<MangaSterManga?>(null)
+        mutableStateOf<
+            MangaSterManga?
+        >(
+            null
+        )
     }
 
     var mangaSterChapters by remember {
-        mutableStateOf<List<MangaSterChapter>>(
+        mutableStateOf<
+            List<MangaSterChapter>
+        >(
             emptyList()
         )
     }
 
     var selectedMangaSterChapter by remember {
-        mutableStateOf<MangaSterChapter?>(null)
+        mutableStateOf<
+            MangaSterChapter?
+        >(
+            null
+        )
     }
 
     // =================================================
@@ -362,18 +775,30 @@ fun MangaReaderApp() {
         mutableStateOf(false)
     }
 
-    var animeSamaSelectedChapter by remember {
-        mutableStateOf<String?>(null)
+    var animeSamaMangaName by remember {
+        mutableStateOf(
+            "Anime-Sama"
+        )
     }
 
-    var animeSamaScanInfo by remember {
-        mutableStateOf<Map<String, Int>>(
+    var animeSamaSelectedChapter by remember {
+        mutableStateOf<String?>(
+            null
+        )
+    }
+
+    var animeSamaChapterUrls by remember {
+        mutableStateOf<
+            Map<String, String>
+        >(
             emptyMap()
         )
     }
 
     var animeSamaChapters by remember {
-        mutableStateOf<List<String>>(
+        mutableStateOf<
+            List<String>
+        >(
             emptyList()
         )
     }
@@ -387,7 +812,9 @@ fun MangaReaderApp() {
     }
 
     var pageUrls by remember {
-        mutableStateOf<List<String>>(
+        mutableStateOf<
+            List<String>
+        >(
             emptyList()
         )
     }
@@ -401,7 +828,9 @@ fun MangaReaderApp() {
     }
 
     var error by remember {
-        mutableStateOf<String?>(null)
+        mutableStateOf<String?>(
+            null
+        )
     }
 
     // =================================================
@@ -412,9 +841,12 @@ fun MangaReaderApp() {
         manga: MangaData
     ): String {
 
-        return manga.attributes.title["fr"]
-            ?: manga.attributes.title["en"]
-            ?: manga.attributes.title
+        return manga.attributes
+            .title["fr"]
+            ?: manga.attributes
+                .title["en"]
+            ?: manga.attributes
+                .title
                 .values
                 .firstOrNull()
             ?: "Sans titre"
@@ -422,27 +854,50 @@ fun MangaReaderApp() {
 
     fun resetNavigation() {
 
-        selectedManga = null
-        selectedChapter = null
+        selectedManga =
+            null
 
-        selectedMangaSter = null
-        selectedMangaSterChapter = null
+        selectedChapter =
+            null
 
-        animeSamaOpened = false
-        animeSamaSelectedChapter = null
+        selectedMangaSter =
+            null
 
-        chapters = emptyList()
-        mangaSterChapters = emptyList()
+        selectedMangaSterChapter =
+            null
 
-        animeSamaScanInfo = emptyMap()
-        animeSamaChapters = emptyList()
+        animeSamaOpened =
+            false
 
-        pageUrls = emptyList()
+        animeSamaMangaName =
+            "Anime-Sama"
 
-        chapterOffset = 0
-        hasMoreChapters = false
+        animeSamaSelectedChapter =
+            null
 
-        chapterNumberInput = ""
+        animeSamaChapterUrls =
+            emptyMap()
+
+        animeSamaChapters =
+            emptyList()
+
+        chapters =
+            emptyList()
+
+        mangaSterChapters =
+            emptyList()
+
+        pageUrls =
+            emptyList()
+
+        chapterOffset =
+            0
+
+        hasMoreChapters =
+            false
+
+        chapterNumberInput =
+            ""
     }
 
     // =================================================
@@ -451,58 +906,75 @@ fun MangaReaderApp() {
 
     fun searchManga() {
 
-        if (search.isBlank()) {
+        if (
+            search.isBlank()
+        ) {
             return
         }
 
         scope.launch {
 
-            loading = true
-            error = null
+            loading =
+                true
+
+            error =
+                null
 
             resetNavigation()
 
-            mangas = emptyList()
-            mangaSterResults = emptyList()
+            mangas =
+                emptyList()
+
+            mangaSterResults =
+                emptyList()
 
             try {
 
-                when (selectedSource) {
+                when (
+                    selectedSource
+                ) {
 
                     "MangaDex" -> {
 
                         val response =
-                            MangaDexClient.api
+                            MangaDexClient
+                                .api
                                 .searchManga(
                                     search.trim()
                                 )
 
                         mangas =
-                            if (adultEnabled) {
+                            if (
+                                adultEnabled
+                            ) {
 
                                 response.data
 
                             } else {
 
-                                response.data.filter {
+                                response.data
+                                    .filter {
 
-                                    it.attributes
-                                        .contentRating !=
-                                        "pornographic"
-                                }
+                                        it.attributes
+                                            .contentRating !=
+                                            "pornographic"
+                                    }
                             }
                     }
 
                     "MangaSter" -> {
 
                         val response =
-                            MangaSterClient.api
+                            MangaSterClient
+                                .api
                                 .search(
                                     query =
                                         search.trim()
                                 )
 
-                        if (!response.success) {
+                        if (
+                            !response.success
+                        ) {
 
                             error =
                                 "MangaSter a refusé la recherche."
@@ -516,46 +988,48 @@ fun MangaReaderApp() {
 
                     "Anime-Sama 🇫🇷" -> {
 
-                        // Premier test volontairement
-                        // limité à Blue Lock.
-
-                        val normalized =
-                            search
-                                .trim()
-                                .lowercase()
-                                .replace("-", " ")
-                                .replace("_", " ")
+                        val manga =
+                            AnimeSamaClient
+                                .findManga(
+                                    search.trim()
+                                )
 
                         if (
-                            normalized != "blue lock"
+                            manga == null
                         ) {
 
                             error =
-                                "Test Anime-Sama : recherche Blue Lock pour le moment."
+                                "Aucun manga trouvé sur le miroir Anime-Sama."
 
                         } else {
 
-                            val result =
-                                AnimeSamaClient.api
-                                    .getScanInfo(
-                                        title =
-                                            "Blue Lock"
+                            val chapterList =
+                                AnimeSamaClient
+                                    .getChapters(
+                                        manga.url
                                     )
 
-                            animeSamaScanInfo =
-                                result
+                            animeSamaMangaName =
+                                manga.name
+
+                            animeSamaChapterUrls =
+                                chapterList
+                                    .associate {
+
+                                        it.number to
+                                            it.url
+                                    }
 
                             animeSamaChapters =
-                                result.keys
-                                    .filter {
-
-                                        it.toDoubleOrNull() !=
-                                            null
+                                chapterList
+                                    .map {
+                                        it.number
                                     }
+                                    .distinct()
                                     .sortedByDescending {
 
                                         it.toDoubleOrNull()
-                                            ?: 0.0
+                                            ?: -1.0
                                     }
 
                             if (
@@ -564,7 +1038,7 @@ fun MangaReaderApp() {
                             ) {
 
                                 error =
-                                    "Anime-Sama n'a retourné aucun chapitre."
+                                    "Anime-Sama : aucun chapitre trouvé pour ${manga.name}."
 
                             } else {
 
@@ -575,7 +1049,9 @@ fun MangaReaderApp() {
                     }
                 }
 
-            } catch (e: Exception) {
+            } catch (
+                e: Exception
+            ) {
 
                 error =
                     "$selectedSource : ${
@@ -585,7 +1061,8 @@ fun MangaReaderApp() {
 
             } finally {
 
-                loading = false
+                loading =
+                    false
             }
         }
     }
@@ -600,26 +1077,40 @@ fun MangaReaderApp() {
 
         scope.launch {
 
-            loading = true
-            error = null
+            loading =
+                true
 
-            selectedManga = manga
-            selectedChapter = null
+            error =
+                null
 
-            chapters = emptyList()
-            pageUrls = emptyList()
+            selectedManga =
+                manga
 
-            chapterOffset = 0
-            hasMoreChapters = false
+            selectedChapter =
+                null
+
+            chapters =
+                emptyList()
+
+            pageUrls =
+                emptyList()
+
+            chapterOffset =
+                0
+
+            hasMoreChapters =
+                false
 
             try {
 
                 val response =
-                    MangaDexClient.api
+                    MangaDexClient
+                        .api
                         .getChapters(
                             mangaId =
                                 manga.id,
-                            offset = 0
+                            offset =
+                                0
                         )
 
                 chapters =
@@ -629,16 +1120,20 @@ fun MangaReaderApp() {
                     response.data.size
 
                 hasMoreChapters =
-                    response.data.size == 100
+                    response.data.size ==
+                        100
 
-            } catch (e: Exception) {
+            } catch (
+                e: Exception
+            ) {
 
                 error =
                     "Erreur chapitres MangaDex : ${e.message}"
 
             } finally {
 
-                loading = false
+                loading =
+                    false
             }
         }
     }
@@ -646,7 +1141,8 @@ fun MangaReaderApp() {
     fun loadMoreChapters() {
 
         val manga =
-            selectedManga ?: return
+            selectedManga
+                ?: return
 
         if (
             loadingMore ||
@@ -657,13 +1153,17 @@ fun MangaReaderApp() {
 
         scope.launch {
 
-            loadingMore = true
-            error = null
+            loadingMore =
+                true
+
+            error =
+                null
 
             try {
 
                 val response =
-                    MangaDexClient.api
+                    MangaDexClient
+                        .api
                         .getChapters(
                             mangaId =
                                 manga.id,
@@ -679,16 +1179,20 @@ fun MangaReaderApp() {
                     response.data.size
 
                 hasMoreChapters =
-                    response.data.size == 100
+                    response.data.size ==
+                        100
 
-            } catch (e: Exception) {
+            } catch (
+                e: Exception
+            ) {
 
                 error =
                     "Erreur chargement : ${e.message}"
 
             } finally {
 
-                loadingMore = false
+                loadingMore =
+                    false
             }
         }
     }
@@ -699,8 +1203,11 @@ fun MangaReaderApp() {
 
         scope.launch {
 
-            loading = true
-            error = null
+            loading =
+                true
+
+            error =
+                null
 
             selectedChapter =
                 chapter
@@ -711,7 +1218,8 @@ fun MangaReaderApp() {
             try {
 
                 val result =
-                    MangaDexClient.api
+                    MangaDexClient
+                        .api
                         .getChapterPages(
                             chapter.id
                         )
@@ -722,7 +1230,9 @@ fun MangaReaderApp() {
                         .isEmpty()
 
                 val files =
-                    if (useDataSaver) {
+                    if (
+                        useDataSaver
+                    ) {
 
                         result.chapter
                             .dataSaver
@@ -734,7 +1244,9 @@ fun MangaReaderApp() {
                     }
 
                 val folder =
-                    if (useDataSaver) {
+                    if (
+                        useDataSaver
+                    ) {
 
                         "data-saver"
 
@@ -744,7 +1256,8 @@ fun MangaReaderApp() {
                     }
 
                 pageUrls =
-                    files.map { fileName ->
+                    files.map {
+                        fileName ->
 
                         "${result.baseUrl}/$folder/" +
                             "${result.chapter.hash}/$fileName"
@@ -758,14 +1271,17 @@ fun MangaReaderApp() {
                         "Aucune page disponible pour ce chapitre."
                 }
 
-            } catch (e: Exception) {
+            } catch (
+                e: Exception
+            ) {
 
                 error =
                     "Erreur lecteur MangaDex : ${e.message}"
 
             } finally {
 
-                loading = false
+                loading =
+                    false
             }
         }
     }
@@ -780,8 +1296,11 @@ fun MangaReaderApp() {
 
         scope.launch {
 
-            loading = true
-            error = null
+            loading =
+                true
+
+            error =
+                null
 
             selectedMangaSter =
                 manga
@@ -801,13 +1320,16 @@ fun MangaReaderApp() {
             try {
 
                 val response =
-                    MangaSterClient.api
+                    MangaSterClient
+                        .api
                         .chapters(
                             id =
                                 manga.sourceId
                         )
 
-                if (!response.success) {
+                if (
+                    !response.success
+                ) {
 
                     error =
                         "Impossible de récupérer les chapitres MangaSter."
@@ -824,14 +1346,17 @@ fun MangaReaderApp() {
                             }
                 }
 
-            } catch (e: Exception) {
+            } catch (
+                e: Exception
+            ) {
 
                 error =
                     "Erreur chapitres MangaSter : ${e.message}"
 
             } finally {
 
-                loading = false
+                loading =
+                    false
             }
         }
     }
@@ -842,8 +1367,11 @@ fun MangaReaderApp() {
 
         scope.launch {
 
-            loading = true
-            error = null
+            loading =
+                true
+
+            error =
+                null
 
             selectedMangaSterChapter =
                 chapter
@@ -854,13 +1382,16 @@ fun MangaReaderApp() {
             try {
 
                 val response =
-                    MangaSterClient.api
+                    MangaSterClient
+                        .api
                         .pages(
                             id =
                                 chapter.chapterId
                         )
 
-                if (!response.success) {
+                if (
+                    !response.success
+                ) {
 
                     error =
                         "MangaSter n'a pas fourni les pages."
@@ -888,14 +1419,17 @@ fun MangaReaderApp() {
                     }
                 }
 
-            } catch (e: Exception) {
+            } catch (
+                e: Exception
+            ) {
 
                 error =
                     "Erreur lecteur MangaSter : ${e.message}"
 
             } finally {
 
-                loading = false
+                loading =
+                    false
             }
         }
     }
@@ -908,43 +1442,67 @@ fun MangaReaderApp() {
         chapter: String
     ) {
 
-        val pageCount =
-            animeSamaScanInfo[
+        val chapterUrl =
+            animeSamaChapterUrls[
                 chapter
-            ] ?: 0
+            ]
 
-        if (pageCount <= 0) {
+        if (
+            chapterUrl == null
+        ) {
 
             error =
-                "Nombre de pages introuvable pour le chapitre $chapter."
+                "URL du chapitre $chapter introuvable."
 
             return
         }
 
-        error = null
+        scope.launch {
 
-        animeSamaSelectedChapter =
-            chapter
+            loading =
+                true
 
-        // Pour l'instant on peut déjà
-        // tester directement le lecteur.
-        //
-        // Si Anime-Sama demande ensuite
-        // un Referer spécifique, on
-        // l'ajoutera à Coil.
+            error =
+                null
 
-        val encodedTitle =
-            "Blue%20Lock"
+            animeSamaSelectedChapter =
+                chapter
 
-        pageUrls =
-            (1..pageCount).map { page ->
+            pageUrls =
+                emptyList()
 
-                "${AnimeSamaClient.BASE_URL}" +
-                    "s2/scans/" +
-                    "$encodedTitle/" +
-                    "$chapter/" +
-                    "$page.jpg"
+            try {
+
+                pageUrls =
+                    AnimeSamaClient
+                        .getPages(
+                            chapterUrl
+                        )
+
+                if (
+                    pageUrls.isEmpty()
+                ) {
+
+                    error =
+                        "Anime-Sama : aucune image trouvée pour le chapitre $chapter."
+                }
+
+            } catch (
+                e: Exception
+            ) {
+
+                error =
+                    "Erreur lecteur Anime-Sama : ${
+                        e.message
+                            ?: "Erreur inconnue"
+                    }"
+
+            } finally {
+
+                loading =
+                    false
             }
+        }
     }
 
     // =================================================
@@ -955,11 +1513,17 @@ fun MangaReaderApp() {
 
         when {
 
-            selectedChapter != null -> {
+            selectedChapter !=
+                null -> {
 
-                selectedChapter = null
-                pageUrls = emptyList()
-                error = null
+                selectedChapter =
+                    null
+
+                pageUrls =
+                    emptyList()
+
+                error =
+                    null
             }
 
             selectedMangaSterChapter !=
@@ -988,20 +1552,30 @@ fun MangaReaderApp() {
                     null
             }
 
-            selectedManga != null -> {
+            selectedManga !=
+                null -> {
 
-                selectedManga = null
-                chapters = emptyList()
+                selectedManga =
+                    null
 
-                chapterOffset = 0
-                hasMoreChapters = false
+                chapters =
+                    emptyList()
 
-                error = null
+                chapterOffset =
+                    0
+
+                hasMoreChapters =
+                    false
+
+                error =
+                    null
             }
 
-            selectedMangaSter != null -> {
+            selectedMangaSter !=
+                null -> {
 
-                selectedMangaSter = null
+                selectedMangaSter =
+                    null
 
                 mangaSterChapters =
                     emptyList()
@@ -1009,7 +1583,8 @@ fun MangaReaderApp() {
                 chapterNumberInput =
                     ""
 
-                error = null
+                error =
+                    null
             }
 
             animeSamaOpened -> {
@@ -1017,7 +1592,10 @@ fun MangaReaderApp() {
                 animeSamaOpened =
                     false
 
-                animeSamaScanInfo =
+                animeSamaMangaName =
+                    "Anime-Sama"
+
+                animeSamaChapterUrls =
                     emptyMap()
 
                 animeSamaChapters =
@@ -1041,7 +1619,8 @@ fun MangaReaderApp() {
             animeSamaSelectedChapter != null
 
     BackHandler(
-        enabled = insideScreen
+        enabled =
+            insideScreen
     ) {
 
         goBack()
@@ -1059,18 +1638,22 @@ fun MangaReaderApp() {
 
         Column(
             modifier =
-                Modifier.fillMaxSize()
+                Modifier
+                    .fillMaxSize()
         ) {
 
             Row(
                 modifier =
                     Modifier
                         .fillMaxWidth()
-                        .padding(8.dp)
+                        .padding(
+                            8.dp
+                        )
             ) {
 
                 Button(
                     onClick = {
+
                         goBack()
                     }
                 ) {
@@ -1087,28 +1670,35 @@ fun MangaReaderApp() {
 
                     Spacer(
                         modifier =
-                            Modifier.width(10.dp)
+                            Modifier.width(
+                                10.dp
+                            )
                     )
 
                     Text(
                         text =
-                            "Blue Lock - Chapitre " +
+                            "$animeSamaMangaName - Chapitre " +
                                 animeSamaSelectedChapter,
                         modifier =
                             Modifier.padding(
-                                top = 12.dp
+                                top =
+                                    12.dp
                             )
                     )
                 }
             }
 
-            if (loading) {
+            if (
+                loading
+            ) {
 
                 Box(
                     modifier =
                         Modifier
                             .fillMaxSize()
-                            .padding(30.dp)
+                            .padding(
+                                30.dp
+                            )
                 ) {
 
                     CircularProgressIndicator()
@@ -1119,16 +1709,20 @@ fun MangaReaderApp() {
             ) {
 
                 Text(
-                    text = error!!,
+                    text =
+                        error!!,
                     modifier =
-                        Modifier.padding(16.dp)
+                        Modifier.padding(
+                            16.dp
+                        )
                 )
 
             } else {
 
                 LazyColumn(
                     modifier =
-                        Modifier.fillMaxSize()
+                        Modifier
+                            .fillMaxSize()
                 ) {
 
                     items(
@@ -1136,7 +1730,38 @@ fun MangaReaderApp() {
                     ) { url ->
 
                         AsyncImage(
-                            model = url,
+                            model =
+                                if (
+                                    animeSamaSelectedChapter !=
+                                        null
+                                ) {
+
+                                    ImageRequest
+                                        .Builder(
+                                            context
+                                        )
+                                        .data(
+                                            url
+                                        )
+                                        .headers(
+                                            Headers
+                                                .Builder()
+                                                .set(
+                                                    "User-Agent",
+                                                    AnimeSamaClient.USER_AGENT
+                                                )
+                                                .set(
+                                                    "Referer",
+                                                    AnimeSamaClient.ORIGIN
+                                                )
+                                                .build()
+                                        )
+                                        .build()
+
+                                } else {
+
+                                    url
+                                },
                             contentDescription =
                                 null,
                             contentScale =
@@ -1158,49 +1783,67 @@ fun MangaReaderApp() {
     // MANGADEX CHAPTER LIST
     // =================================================
 
-    selectedManga?.let { manga ->
+    selectedManga?.let {
+        manga ->
 
         Column(
             modifier =
-                Modifier.fillMaxSize()
+                Modifier
+                    .fillMaxSize()
         ) {
 
             Button(
                 onClick = {
+
                     goBack()
                 },
                 modifier =
-                    Modifier.padding(8.dp)
+                    Modifier.padding(
+                        8.dp
+                    )
             ) {
 
-                Text("← Retour")
+                Text(
+                    "← Retour"
+                )
             }
 
             Text(
                 text =
-                    mangaTitle(manga),
+                    mangaTitle(
+                        manga
+                    ),
                 style =
                     MaterialTheme
                         .typography
                         .headlineSmall,
                 modifier =
-                    Modifier.padding(16.dp)
+                    Modifier.padding(
+                        16.dp
+                    )
             )
 
-            if (loading) {
+            if (
+                loading
+            ) {
 
                 CircularProgressIndicator(
                     modifier =
-                        Modifier.padding(20.dp)
+                        Modifier.padding(
+                            20.dp
+                        )
                 )
 
             } else {
 
                 LazyColumn(
                     modifier =
-                        Modifier.fillMaxSize(),
+                        Modifier
+                            .fillMaxSize(),
                     contentPadding =
-                        PaddingValues(8.dp)
+                        PaddingValues(
+                            8.dp
+                        )
                 ) {
 
                     items(
@@ -1211,7 +1854,9 @@ fun MangaReaderApp() {
                             modifier =
                                 Modifier
                                     .fillMaxWidth()
-                                    .padding(4.dp)
+                                    .padding(
+                                        4.dp
+                                    )
                                     .clickable {
 
                                         openChapter(
@@ -1245,7 +1890,9 @@ fun MangaReaderApp() {
                                     }
                                     ?.let {
 
-                                        Text(it)
+                                        Text(
+                                            it
+                                        )
                                     }
                             }
                         }
@@ -1259,6 +1906,7 @@ fun MangaReaderApp() {
 
                             Button(
                                 onClick = {
+
                                     loadMoreChapters()
                                 },
                                 enabled =
@@ -1266,16 +1914,21 @@ fun MangaReaderApp() {
                                 modifier =
                                     Modifier
                                         .fillMaxWidth()
-                                        .padding(12.dp)
+                                        .padding(
+                                            12.dp
+                                        )
                             ) {
 
-                                if (loadingMore) {
+                                if (
+                                    loadingMore
+                                ) {
 
                                     CircularProgressIndicator(
                                         modifier =
-                                            Modifier.size(
-                                                20.dp
-                                            )
+                                            Modifier
+                                                .size(
+                                                    20.dp
+                                                )
                                     )
 
                                 } else {
@@ -1298,22 +1951,29 @@ fun MangaReaderApp() {
     // MANGASTER CHAPTER LIST
     // =================================================
 
-    selectedMangaSter?.let { manga ->
+    selectedMangaSter?.let {
+        manga ->
 
         Column(
             modifier =
-                Modifier.fillMaxSize()
+                Modifier
+                    .fillMaxSize()
         ) {
 
             Button(
                 onClick = {
+
                     goBack()
                 },
                 modifier =
-                    Modifier.padding(8.dp)
+                    Modifier.padding(
+                        8.dp
+                    )
             ) {
 
-                Text("← Retour")
+                Text(
+                    "← Retour"
+                )
             }
 
             Text(
@@ -1324,7 +1984,9 @@ fun MangaReaderApp() {
                         .typography
                         .headlineSmall,
                 modifier =
-                    Modifier.padding(16.dp)
+                    Modifier.padding(
+                        16.dp
+                    )
             )
 
             Text(
@@ -1332,8 +1994,10 @@ fun MangaReaderApp() {
                     "${mangaSterChapters.size} chapitres disponibles",
                 modifier =
                     Modifier.padding(
-                        start = 16.dp,
-                        bottom = 8.dp
+                        start =
+                            16.dp,
+                        bottom =
+                            8.dp
                     )
             )
 
@@ -1341,7 +2005,9 @@ fun MangaReaderApp() {
                 modifier =
                     Modifier
                         .fillMaxWidth()
-                        .padding(16.dp)
+                        .padding(
+                            16.dp
+                        )
             ) {
 
                 OutlinedTextField(
@@ -1350,28 +2016,37 @@ fun MangaReaderApp() {
                     onValueChange = {
 
                         chapterNumberInput =
-                            it.filter { char ->
+                            it.filter {
+                                char ->
+
                                 char.isDigit()
                             }
                     },
                     label = {
+
                         Text(
                             "N° du chapitre"
                         )
                     },
-                    singleLine = true,
+                    singleLine =
+                        true,
                     keyboardOptions =
                         KeyboardOptions(
                             keyboardType =
                                 KeyboardType.Number
                         ),
                     modifier =
-                        Modifier.weight(1f)
+                        Modifier
+                            .weight(
+                                1f
+                            )
                 )
 
                 Spacer(
                     modifier =
-                        Modifier.width(8.dp)
+                        Modifier.width(
+                            8.dp
+                        )
                 )
 
                 Button(
@@ -1390,7 +2065,9 @@ fun MangaReaderApp() {
                                         wanted
                                 }
 
-                        if (chapter != null) {
+                        if (
+                            chapter != null
+                        ) {
 
                             openMangaSterChapter(
                                 chapter
@@ -1404,37 +2081,50 @@ fun MangaReaderApp() {
                     },
                     modifier =
                         Modifier.padding(
-                            top = 8.dp
+                            top =
+                                8.dp
                         )
                 ) {
 
-                    Text("Aller")
+                    Text(
+                        "Aller"
+                    )
                 }
             }
 
             error?.let {
 
                 Text(
-                    text = it,
+                    text =
+                        it,
                     modifier =
-                        Modifier.padding(16.dp)
+                        Modifier.padding(
+                            16.dp
+                        )
                 )
             }
 
-            if (loading) {
+            if (
+                loading
+            ) {
 
                 CircularProgressIndicator(
                     modifier =
-                        Modifier.padding(20.dp)
+                        Modifier.padding(
+                            20.dp
+                        )
                 )
 
             } else {
 
                 LazyColumn(
                     modifier =
-                        Modifier.fillMaxSize(),
+                        Modifier
+                            .fillMaxSize(),
                     contentPadding =
-                        PaddingValues(8.dp)
+                        PaddingValues(
+                            8.dp
+                        )
                 ) {
 
                     items(
@@ -1445,7 +2135,9 @@ fun MangaReaderApp() {
                             modifier =
                                 Modifier
                                     .fillMaxWidth()
-                                    .padding(4.dp)
+                                    .padding(
+                                        4.dp
+                                    )
                                     .clickable {
 
                                         openMangaSterChapter(
@@ -1493,35 +2185,45 @@ fun MangaReaderApp() {
     // ANIME-SAMA CHAPTER LIST
     // =================================================
 
-    if (animeSamaOpened) {
+    if (
+        animeSamaOpened
+    ) {
 
         Column(
             modifier =
-                Modifier.fillMaxSize()
+                Modifier
+                    .fillMaxSize()
         ) {
 
             Button(
                 onClick = {
+
                     goBack()
                 },
                 modifier =
-                    Modifier.padding(8.dp)
+                    Modifier.padding(
+                        8.dp
+                    )
             ) {
 
-                Text("← Retour")
+                Text(
+                    "← Retour"
+                )
             }
 
             Text(
                 text =
-                    "Blue Lock 🇫🇷",
+                    "$animeSamaMangaName 🇫🇷",
                 style =
                     MaterialTheme
                         .typography
                         .headlineSmall,
                 modifier =
                     Modifier.padding(
-                        start = 16.dp,
-                        top = 8.dp
+                        start =
+                            16.dp,
+                        top =
+                            8.dp
                     )
             )
 
@@ -1530,19 +2232,22 @@ fun MangaReaderApp() {
                     "${animeSamaChapters.size} chapitres Anime-Sama",
                 modifier =
                     Modifier.padding(
-                        start = 16.dp,
-                        top = 4.dp,
-                        bottom = 8.dp
+                        start =
+                            16.dp,
+                        top =
+                            4.dp,
+                        bottom =
+                            8.dp
                     )
             )
-
-            // ALLER AU CHAPITRE
 
             Row(
                 modifier =
                     Modifier
                         .fillMaxWidth()
-                        .padding(16.dp)
+                        .padding(
+                            16.dp
+                        )
             ) {
 
                 OutlinedTextField(
@@ -1551,7 +2256,8 @@ fun MangaReaderApp() {
                     onValueChange = {
 
                         chapterNumberInput =
-                            it.filter { char ->
+                            it.filter {
+                                char ->
 
                                 char.isDigit() ||
                                     char == '.'
@@ -1569,19 +2275,25 @@ fun MangaReaderApp() {
                             "Ex : 300"
                         )
                     },
-                    singleLine = true,
+                    singleLine =
+                        true,
                     keyboardOptions =
                         KeyboardOptions(
                             keyboardType =
                                 KeyboardType.Decimal
                         ),
                     modifier =
-                        Modifier.weight(1f)
+                        Modifier
+                            .weight(
+                                1f
+                            )
                 )
 
                 Spacer(
                     modifier =
-                        Modifier.width(8.dp)
+                        Modifier.width(
+                            8.dp
+                        )
                 )
 
                 Button(
@@ -1601,7 +2313,8 @@ fun MangaReaderApp() {
                                 }
 
                         if (
-                            realChapter != null
+                            realChapter !=
+                            null
                         ) {
 
                             openAnimeSamaChapter(
@@ -1616,46 +2329,51 @@ fun MangaReaderApp() {
                     },
                     modifier =
                         Modifier.padding(
-                            top = 8.dp
+                            top =
+                                8.dp
                         )
                 ) {
 
-                    Text("Aller")
+                    Text(
+                        "Aller"
+                    )
                 }
             }
 
             error?.let {
 
                 Text(
-                    text = it,
+                    text =
+                        it,
                     modifier =
                         Modifier.padding(
-                            horizontal = 16.dp
+                            horizontal =
+                                16.dp
                         )
                 )
             }
 
             LazyColumn(
                 modifier =
-                    Modifier.fillMaxSize(),
+                    Modifier
+                        .fillMaxSize(),
                 contentPadding =
-                    PaddingValues(8.dp)
+                    PaddingValues(
+                        8.dp
+                    )
             ) {
 
                 items(
                     animeSamaChapters
                 ) { chapter ->
 
-                    val pages =
-                        animeSamaScanInfo[
-                            chapter
-                        ] ?: 0
-
                     Card(
                         modifier =
                             Modifier
                                 .fillMaxWidth()
-                                .padding(4.dp)
+                                .padding(
+                                    4.dp
+                                )
                                 .clickable {
 
                                     openAnimeSamaChapter(
@@ -1682,7 +2400,7 @@ fun MangaReaderApp() {
 
                             Text(
                                 text =
-                                    "$pages pages",
+                                    "VF • Anime-Sama",
                                 style =
                                     MaterialTheme
                                         .typography
@@ -1705,7 +2423,9 @@ fun MangaReaderApp() {
         modifier =
             Modifier
                 .fillMaxSize()
-                .padding(16.dp)
+                .padding(
+                    16.dp
+                )
     ) {
 
         Text(
@@ -1719,10 +2439,10 @@ fun MangaReaderApp() {
 
         Spacer(
             modifier =
-                Modifier.height(16.dp)
+                Modifier.height(
+                    16.dp
+                )
         )
-
-        // SOURCE
 
         ExposedDropdownMenuBox(
             expanded =
@@ -1737,11 +2457,15 @@ fun MangaReaderApp() {
             OutlinedTextField(
                 value =
                     selectedSource,
-                onValueChange = {},
-                readOnly = true,
+                onValueChange =
+                    {},
+                readOnly =
+                    true,
                 label = {
 
-                    Text("Source")
+                    Text(
+                        "Source"
+                    )
                 },
                 trailingIcon = {
 
@@ -1770,7 +2494,9 @@ fun MangaReaderApp() {
                 DropdownMenuItem(
                     text = {
 
-                        Text("MangaDex")
+                        Text(
+                            "MangaDex"
+                        )
                     },
                     onClick = {
 
@@ -1788,14 +2514,17 @@ fun MangaReaderApp() {
                         mangaSterResults =
                             emptyList()
 
-                        error = null
+                        error =
+                            null
                     }
                 )
 
                 DropdownMenuItem(
                     text = {
 
-                        Text("MangaSter")
+                        Text(
+                            "MangaSter"
+                        )
                     },
                     onClick = {
 
@@ -1813,7 +2542,8 @@ fun MangaReaderApp() {
                         mangaSterResults =
                             emptyList()
 
-                        error = null
+                        error =
+                            null
                     }
                 )
 
@@ -1840,7 +2570,8 @@ fun MangaReaderApp() {
                         mangaSterResults =
                             emptyList()
 
-                        error = null
+                        error =
+                            null
                     }
                 )
             }
@@ -1848,7 +2579,9 @@ fun MangaReaderApp() {
 
         Spacer(
             modifier =
-                Modifier.height(12.dp)
+                Modifier.height(
+                    12.dp
+                )
         )
 
         OutlinedTextField(
@@ -1856,7 +2589,8 @@ fun MangaReaderApp() {
                 search,
             onValueChange = {
 
-                search = it
+                search =
+                    it
             },
             label = {
 
@@ -1866,7 +2600,7 @@ fun MangaReaderApp() {
                             "Anime-Sama 🇫🇷"
                     ) {
 
-                        "Tape Blue Lock"
+                        "Rechercher un manga VF"
 
                     } else {
 
@@ -1874,14 +2608,18 @@ fun MangaReaderApp() {
                     }
                 )
             },
-            singleLine = true,
+            singleLine =
+                true,
             modifier =
-                Modifier.fillMaxWidth()
+                Modifier
+                    .fillMaxWidth()
         )
 
         Spacer(
             modifier =
-                Modifier.height(10.dp)
+                Modifier.height(
+                    10.dp
+                )
         )
 
         Button(
@@ -1893,11 +2631,14 @@ fun MangaReaderApp() {
                 !loading &&
                     search.isNotBlank(),
             modifier =
-                Modifier.fillMaxWidth()
+                Modifier
+                    .fillMaxWidth()
         ) {
 
             Text(
-                if (loading) {
+                if (
+                    loading
+                ) {
 
                     "Chargement..."
 
@@ -1907,8 +2648,6 @@ fun MangaReaderApp() {
                 }
             )
         }
-
-        // +18 uniquement MangaDex
 
         if (
             selectedSource ==
@@ -1920,21 +2659,24 @@ fun MangaReaderApp() {
                     Modifier
                         .fillMaxWidth()
                         .padding(
-                            top = 8.dp
+                            top =
+                                8.dp
                         ),
                 horizontalArrangement =
-                    Arrangement
-                        .SpaceBetween
+                    Arrangement.SpaceBetween
             ) {
 
-                Text("+18")
+                Text(
+                    "+18"
+                )
 
                 Switch(
                     checked =
                         adultEnabled,
                     onCheckedChange = {
 
-                        adultEnabled = it
+                        adultEnabled =
+                            it
                     }
                 )
             }
@@ -1947,10 +2689,11 @@ fun MangaReaderApp() {
 
             Text(
                 text =
-                    "Test VF : Blue Lock uniquement pour cette première version.",
+                    "Source VF via le miroir Anime-Sama.",
                 modifier =
                     Modifier.padding(
-                        top = 10.dp
+                        top =
+                            10.dp
                     )
             )
         }
@@ -1958,24 +2701,33 @@ fun MangaReaderApp() {
         error?.let {
 
             Text(
-                text = it,
+                text =
+                    it,
                 modifier =
                     Modifier.padding(
-                        top = 12.dp,
-                        bottom = 8.dp
+                        top =
+                            12.dp,
+                        bottom =
+                            8.dp
                     )
             )
         }
 
-        if (loading) {
+        if (
+            loading
+        ) {
 
             CircularProgressIndicator(
                 modifier =
-                    Modifier.padding(20.dp)
+                    Modifier.padding(
+                        20.dp
+                    )
             )
         }
 
+        // =================================================
         // MANGADEX RESULTS
+        // =================================================
 
         if (
             selectedSource ==
@@ -1985,7 +2737,8 @@ fun MangaReaderApp() {
 
             LazyColumn(
                 modifier =
-                    Modifier.fillMaxSize()
+                    Modifier
+                        .fillMaxSize()
             ) {
 
                 items(
@@ -2045,7 +2798,9 @@ fun MangaReaderApp() {
             }
         }
 
+        // =================================================
         // MANGASTER RESULTS
+        // =================================================
 
         if (
             selectedSource ==
@@ -2055,7 +2810,8 @@ fun MangaReaderApp() {
 
             LazyColumn(
                 modifier =
-                    Modifier.fillMaxSize()
+                    Modifier
+                        .fillMaxSize()
             ) {
 
                 items(
@@ -2113,7 +2869,9 @@ fun MangaReaderApp() {
                                 Text(
                                     text =
                                         manga.genres
-                                            .take(5)
+                                            .take(
+                                                5
+                                            )
                                             .joinToString(
                                                 " • "
                                             ),
