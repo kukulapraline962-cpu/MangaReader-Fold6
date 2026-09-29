@@ -78,7 +78,9 @@ interface MangaDexApi {
         @Query("order[chapter]")
         order: String = "desc",
         @Query("limit")
-        limit: Int = 100
+        limit: Int = 100,
+        @Query("offset")
+        offset: Int = 0
     ): ChapterResponse
 
     @GET("at-home/server/{chapterId}")
@@ -152,7 +154,19 @@ fun MangaReaderApp() {
         )
     }
 
+    var chapterOffset by remember {
+        mutableStateOf(0)
+    }
+
+    var hasMoreChapters by remember {
+        mutableStateOf(false)
+    }
+
     var loading by remember {
+        mutableStateOf(false)
+    }
+
+    var loadingMore by remember {
         mutableStateOf(false)
     }
 
@@ -226,6 +240,8 @@ fun MangaReaderApp() {
 
         selectedManga = manga
         chapters = emptyList()
+        chapterOffset = 0
+        hasMoreChapters = false
         error = null
 
         scope.launch {
@@ -234,12 +250,20 @@ fun MangaReaderApp() {
 
             try {
 
-                chapters =
+                val result =
                     MangaDexClient.api
                         .getChapters(
-                            manga.id
+                            mangaId = manga.id,
+                            offset = 0
                         )
-                        .data
+
+                chapters = result.data
+
+                chapterOffset =
+                    result.data.size
+
+                hasMoreChapters =
+                    result.data.size == 100
 
             } catch (e: Exception) {
 
@@ -250,6 +274,51 @@ fun MangaReaderApp() {
             } finally {
 
                 loading = false
+            }
+        }
+    }
+
+    fun loadMoreChapters() {
+
+        val manga =
+            selectedManga ?: return
+
+        if (loadingMore) {
+            return
+        }
+
+        scope.launch {
+
+            loadingMore = true
+            error = null
+
+            try {
+
+                val result =
+                    MangaDexClient.api
+                        .getChapters(
+                            mangaId = manga.id,
+                            offset = chapterOffset
+                        )
+
+                chapters =
+                    chapters + result.data
+
+                chapterOffset +=
+                    result.data.size
+
+                hasMoreChapters =
+                    result.data.size == 100
+
+            } catch (e: Exception) {
+
+                error =
+                    e.message
+                        ?: "Impossible de charger plus de chapitres"
+
+            } finally {
+
+                loadingMore = false
             }
         }
     }
@@ -323,6 +392,8 @@ fun MangaReaderApp() {
 
             selectedManga = null
             chapters = emptyList()
+            chapterOffset = 0
+            hasMoreChapters = false
             error = null
         }
     }
@@ -330,7 +401,7 @@ fun MangaReaderApp() {
     BackHandler(
         enabled =
             selectedManga != null ||
-            selectedChapter != null
+                selectedChapter != null
     ) {
         goBack()
     }
@@ -384,8 +455,7 @@ fun MangaReaderApp() {
             error?.let { message ->
 
                 Text(
-                    text =
-                        "Erreur : $message"
+                    "Erreur : $message"
                 )
 
                 Spacer(
@@ -465,8 +535,7 @@ fun MangaReaderApp() {
             error?.let { message ->
 
                 Text(
-                    text =
-                        "Erreur : $message"
+                    "Erreur : $message"
                 )
 
                 Spacer(
@@ -560,6 +629,44 @@ fun MangaReaderApp() {
                         }
                     }
                 }
+
+                if (hasMoreChapters) {
+
+                    item {
+
+                        Spacer(
+                            Modifier.height(8.dp)
+                        )
+
+                        Button(
+                            onClick = {
+                                loadMoreChapters()
+                            },
+                            enabled =
+                                !loadingMore,
+                            modifier =
+                                Modifier.fillMaxWidth()
+                        ) {
+
+                            if (loadingMore) {
+
+                                Text(
+                                    "Chargement..."
+                                )
+
+                            } else {
+
+                                Text(
+                                    "Charger plus de chapitres"
+                                )
+                            }
+                        }
+
+                        Spacer(
+                            Modifier.height(16.dp)
+                        )
+                    }
+                }
             }
 
         } else {
@@ -610,6 +717,7 @@ fun MangaReaderApp() {
                 modifier =
                     Modifier.fillMaxWidth()
             ) {
+
                 Text("Rechercher")
             }
 
@@ -653,8 +761,7 @@ fun MangaReaderApp() {
             error?.let { message ->
 
                 Text(
-                    text =
-                        "Erreur : $message"
+                    "Erreur : $message"
                 )
 
                 Spacer(
