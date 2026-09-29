@@ -11,7 +11,9 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
+import coil.compose.AsyncImage
 import kotlinx.coroutines.launch
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
@@ -49,6 +51,17 @@ data class ChapterAttributes(
     val translatedLanguage: String? = null
 )
 
+data class AtHomeResponse(
+    val baseUrl: String,
+    val chapter: AtHomeChapter
+)
+
+data class AtHomeChapter(
+    val hash: String,
+    val data: List<String> = emptyList(),
+    val dataSaver: List<String> = emptyList()
+)
+
 interface MangaDexApi {
 
     @GET("manga")
@@ -67,12 +80,16 @@ interface MangaDexApi {
         @Query("limit")
         limit: Int = 100
     ): ChapterResponse
+
+    @GET("at-home/server/{chapterId}")
+    suspend fun getChapterPages(
+        @Path("chapterId") chapterId: String
+    ): AtHomeResponse
 }
 
 object MangaDexClient {
 
     val api: MangaDexApi by lazy {
-
         Retrofit.Builder()
             .baseUrl("https://api.mangadex.org/")
             .addConverterFactory(
@@ -121,6 +138,16 @@ fun MangaReaderApp() {
 
     var chapters by remember {
         mutableStateOf<List<ChapterData>>(
+            emptyList()
+        )
+    }
+
+    var selectedChapter by remember {
+        mutableStateOf<ChapterData?>(null)
+    }
+
+    var pageUrls by remember {
+        mutableStateOf<List<String>>(
             emptyList()
         )
     }
@@ -207,14 +234,12 @@ fun MangaReaderApp() {
 
             try {
 
-                val result =
+                chapters =
                     MangaDexClient.api
                         .getChapters(
                             manga.id
                         )
-
-                chapters =
-                    result.data
+                        .data
 
             } catch (e: Exception) {
 
@@ -229,15 +254,83 @@ fun MangaReaderApp() {
         }
     }
 
+    fun openChapter(
+        chapter: ChapterData
+    ) {
+
+        selectedChapter = chapter
+        pageUrls = emptyList()
+        error = null
+
+        scope.launch {
+
+            loading = true
+
+            try {
+
+                val result =
+                    MangaDexClient.api
+                        .getChapterPages(
+                            chapter.id
+                        )
+
+                val useDataSaver =
+                    result.chapter.data.isEmpty()
+
+                val files =
+                    if (useDataSaver) {
+                        result.chapter.dataSaver
+                    } else {
+                        result.chapter.data
+                    }
+
+                val folder =
+                    if (useDataSaver) {
+                        "data-saver"
+                    } else {
+                        "data"
+                    }
+
+                pageUrls =
+                    files.map { fileName ->
+
+                        "${result.baseUrl}/$folder/" +
+                            "${result.chapter.hash}/$fileName"
+                    }
+
+            } catch (e: Exception) {
+
+                error =
+                    e.message
+                        ?: "Impossible de charger les pages"
+
+            } finally {
+
+                loading = false
+            }
+        }
+    }
+
     fun goBack() {
 
-        selectedManga = null
-        chapters = emptyList()
-        error = null
+        if (selectedChapter != null) {
+
+            selectedChapter = null
+            pageUrls = emptyList()
+            error = null
+
+        } else if (selectedManga != null) {
+
+            selectedManga = null
+            chapters = emptyList()
+            error = null
+        }
     }
 
     BackHandler(
-        enabled = selectedManga != null
+        enabled =
+            selectedManga != null ||
+            selectedChapter != null
     ) {
         goBack()
     }
@@ -248,20 +341,98 @@ fun MangaReaderApp() {
             .padding(16.dp)
     ) {
 
-        if (selectedManga != null) {
+        if (selectedChapter != null) {
 
-            Row(
-                modifier =
-                    Modifier.fillMaxWidth()
+            TextButton(
+                onClick = {
+                    goBack()
+                }
+            ) {
+                Text("← Retour")
+            }
+
+            Text(
+                text =
+                    "Chapitre ${
+                        selectedChapter
+                            ?.attributes
+                            ?.chapter
+                            ?: "?"
+                    }",
+                style =
+                    MaterialTheme
+                        .typography
+                        .headlineMedium
+            )
+
+            Spacer(
+                Modifier.height(12.dp)
+            )
+
+            if (loading) {
+
+                LinearProgressIndicator(
+                    modifier =
+                        Modifier.fillMaxWidth()
+                )
+
+                Spacer(
+                    Modifier.height(12.dp)
+                )
+            }
+
+            error?.let { message ->
+
+                Text(
+                    text =
+                        "Erreur : $message"
+                )
+
+                Spacer(
+                    Modifier.height(12.dp)
+                )
+            }
+
+            if (
+                !loading &&
+                pageUrls.isEmpty() &&
+                error == null
             ) {
 
-                TextButton(
-                    onClick = {
-                        goBack()
-                    }
-                ) {
-                    Text("← Retour")
+                Text(
+                    "Aucune page disponible."
+                )
+            }
+
+            LazyColumn(
+                modifier =
+                    Modifier.fillMaxSize()
+            ) {
+
+                items(
+                    items = pageUrls
+                ) { pageUrl ->
+
+                    AsyncImage(
+                        model = pageUrl,
+                        contentDescription =
+                            "Page du manga",
+                        modifier =
+                            Modifier.fillMaxWidth(),
+                        contentScale =
+                            ContentScale.FillWidth
+                    )
                 }
+            }
+
+        } else if (selectedManga != null) {
+
+            TextButton(
+                onClick = {
+                    goBack()
+                }
+            ) {
+                Text("← Retour")
             }
 
             Text(
@@ -312,10 +483,6 @@ fun MangaReaderApp() {
                 Text(
                     "Aucun chapitre français trouvé."
                 )
-
-                Spacer(
-                    Modifier.height(12.dp)
-                )
             }
 
             LazyColumn(
@@ -331,13 +498,20 @@ fun MangaReaderApp() {
                 ) { chapter ->
 
                     Card(
-                        modifier =
-                            Modifier.fillMaxWidth()
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                openChapter(
+                                    chapter
+                                )
+                            }
                     ) {
 
                         Column(
                             modifier =
-                                Modifier.padding(16.dp)
+                                Modifier.padding(
+                                    16.dp
+                                )
                         ) {
 
                             Text(
@@ -381,12 +555,7 @@ fun MangaReaderApp() {
                             )
 
                             Text(
-                                "Langue : ${
-                                    chapter
-                                        .attributes
-                                        .translatedLanguage
-                                        ?: "?"
-                                }"
+                                "Lire le chapitre →"
                             )
                         }
                     }
@@ -408,7 +577,7 @@ fun MangaReaderApp() {
             )
 
             Text(
-                text = "Source : MangaDex"
+                "Source : MangaDex"
             )
 
             Spacer(
@@ -441,7 +610,6 @@ fun MangaReaderApp() {
                 modifier =
                     Modifier.fillMaxWidth()
             ) {
-
                 Text("Rechercher")
             }
 
@@ -510,18 +678,24 @@ fun MangaReaderApp() {
                         modifier = Modifier
                             .fillMaxWidth()
                             .clickable {
-                                openManga(manga)
+                                openManga(
+                                    manga
+                                )
                             }
                     ) {
 
                         Column(
                             modifier =
-                                Modifier.padding(16.dp)
+                                Modifier.padding(
+                                    16.dp
+                                )
                         ) {
 
                             Text(
                                 text =
-                                    mangaTitle(manga),
+                                    mangaTitle(
+                                        manga
+                                    ),
                                 style =
                                     MaterialTheme
                                         .typography
